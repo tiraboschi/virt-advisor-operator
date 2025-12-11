@@ -56,7 +56,7 @@ kubectl patch configurationplan load-aware-rebalancing \
 
 # Verify the changes were applied
 kubectl get kubedescheduler cluster -o yaml
-kubectl get machineconfig 50-worker-psi-metrics -o yaml
+kubectl get machineconfig 99-worker-psi-karg -o yaml
 
 # Clean up
 kubectl delete -f config/samples/loadaware_sample.yaml

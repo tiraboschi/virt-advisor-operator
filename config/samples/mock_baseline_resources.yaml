@@ -16,7 +16,7 @@ spec:
 apiVersion: machineconfiguration.openshift.io/v1
 kind: MachineConfig
 metadata:
-  name: 50-worker-psi-metrics
+  name: 99-worker-psi-karg
   labels:
     machineconfiguration.openshift.io/role: worker
 spec:

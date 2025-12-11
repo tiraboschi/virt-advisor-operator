@@ -142,7 +142,7 @@ kubectl patch configurationplan load-aware-rebalancing \
 kubectl get kubedescheduler cluster -o yaml
 
 # Check machine config
-kubectl get machineconfig 50-worker-psi-metrics -o yaml
+kubectl get machineconfig 99-worker-psi-karg -o yaml
 ```
 
 ## Configuration Overrides
@@ -203,7 +203,7 @@ kubectl patch configurationplan load-aware-rebalancing \
 # Verify changes
 kubectl get kubedescheduler cluster -n openshift-kube-descheduler-operator -o jsonpath='{.spec.profiles}' | grep KubeVirtRelieveAndMigrate
 kubectl get kubedescheduler cluster -n openshift-kube-descheduler-operator -o jsonpath='{.spec.profileCustomizations}'
-kubectl get machineconfig 50-worker-psi-metrics -o jsonpath='{.spec.kernelArguments}' | grep psi
+kubectl get machineconfig 99-worker-psi-karg -o jsonpath='{.spec.kernelArguments}' | grep psi
 ```
 
 ## Implementation Details

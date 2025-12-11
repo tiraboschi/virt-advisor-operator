@@ -334,7 +334,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 
 // generateMachineConfigItem creates a plan item for MachineConfig PSI enablement
 func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Context, c client.Client) (hcov1alpha1.ConfigurationPlanItem, error) {
-	mcName := "50-worker-psi-metrics"
+	mcName := "99-worker-psi-karg"
 
 	// Build the desired MachineConfig object
 	desired := plan.CreateUnstructured(MachineConfigGVK, mcName, "")

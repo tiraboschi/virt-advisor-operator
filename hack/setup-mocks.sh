@@ -30,7 +30,7 @@ echo ""
 echo "Verifying installation..."
 kubectl get crd | grep -E "(kubedeschedulers|machineconfigs)"
 kubectl get kubedescheduler cluster -o yaml | head -20
-kubectl get machineconfig 50-worker-psi-metrics -o yaml | head -20
+kubectl get machineconfig 99-worker-psi-karg -o yaml | head -20
 
 echo ""
 echo "===== Mock environment setup complete! ====="

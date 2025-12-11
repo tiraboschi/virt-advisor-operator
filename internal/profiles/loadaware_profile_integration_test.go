@@ -162,7 +162,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem.Name).To(Equal("enable-psi-metrics"))
 			Expect(mcItem.TargetRef.Kind).To(Equal("MachineConfig"))
 			Expect(mcItem.TargetRef.APIVersion).To(Equal("machineconfiguration.openshift.io/v1"))
-			Expect(mcItem.TargetRef.Name).To(Equal("50-worker-psi-metrics"))
+			Expect(mcItem.TargetRef.Name).To(Equal("99-worker-psi-karg"))
 			Expect(mcItem.TargetRef.Namespace).To(BeEmpty(), "MachineConfig is cluster-scoped")
 			Expect(mcItem.State).To(Equal(hcov1alpha1.ItemStatePending))
 		})
