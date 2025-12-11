@@ -65,6 +65,32 @@ type ConfigurationPlanSpec struct {
 	// ConfigOverrides allows tuning specific parameters of the chosen profile.
 	// +optional
 	ConfigOverrides map[string]string `json:"configOverrides,omitempty"`
+
+	// BypassOptimisticLock disables staleness checks before execution.
+	// WARNING: This is dangerous! When true, the controller will apply configurations
+	// even if target resources have been modified since plan generation, potentially
+	// overwriting manual changes or applying outdated configurations.
+	// Only use this in emergency recovery scenarios or dev/test environments.
+	// Defaults to false.
+	// +optional
+	// +kubebuilder:default=false
+	BypassOptimisticLock bool `json:"bypassOptimisticLock,omitempty"`
+
+	// WaitTimeout specifies the maximum time to wait for resources to become healthy
+	// after applying configuration changes. This is particularly important for
+	// high-impact changes like MachineConfig rollouts that can take hours or days
+	// on large clusters with many nodes and VMs to migrate.
+	//
+	// If not set, the controller will wait indefinitely (checking on each reconciliation)
+	// until resources become healthy. This is the recommended setting for production
+	// clusters where rollout times are unpredictable.
+	//
+	// If set, the controller will fail items that don't become healthy within this duration.
+	// The timeout is measured from when the item enters InProgress state.
+	//
+	// Examples: "30m", "2h", "24h"
+	// +optional
+	WaitTimeout *metav1.Duration `json:"waitTimeout,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;Failed;Drifted
@@ -121,6 +147,12 @@ type ConfigurationPlanItem struct {
 	// LastTransitionTime is the last time the state transitioned.
 	// +optional
 	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+
+	// ManagedFields specifies which spec fields this plan item manages.
+	// Used for drift detection to only monitor fields we control.
+	// Format: JSON path like "spec.profiles", "spec.kernelArguments"
+	// +optional
+	ManagedFields []string `json:"managedFields,omitempty"`
 }
 
 // ObjectReference identifies a Kubernetes object.
@@ -150,6 +182,11 @@ type ConfigurationPlanStatus struct {
 	// the current items. Used to detect upgrade opportunities.
 	// +optional
 	OperatorVersion string `json:"operatorVersion,omitempty"`
+
+	// AppliedConfigOverrides stores the config overrides that were used to generate
+	// the current plan items. Used to detect when spec.configOverrides changes.
+	// +optional
+	AppliedConfigOverrides map[string]string `json:"appliedConfigOverrides,omitempty"`
 
 	// Items is the ordered list of configuration steps to be executed.
 	// +listType=map

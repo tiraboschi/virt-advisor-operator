@@ -26,11 +26,90 @@ The virt-advisor-operator implements a declarative "Plan" pattern for managing c
 
 ### Prerequisites
 - go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+- docker version 17.03+ or podman version 3.0+
+- kubectl version v1.11.3+
+- Access to a Kubernetes v1.11.3+ cluster
+
+### Local Development Setup
+
+For local development and testing, you can use Kind (Kubernetes in Docker/Podman):
+
+```sh
+# One-command setup: creates cluster + installs CRDs + sets up mock resources
+make dev-setup
+
+# Run the controller locally
+make run
+
+# In another terminal, test the LoadAwareRebalancing profile
+kubectl apply -f config/samples/loadaware_sample.yaml
+
+# Watch the ConfigurationPlan progress through phases
+kubectl get configurationplan load-aware-rebalancing -w
+
+# View detailed status with diffs
+kubectl get configurationplan load-aware-rebalancing -o yaml
+
+# After reviewing the DryRun diff, approve and apply changes
+kubectl patch configurationplan load-aware-rebalancing \
+  --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"Apply"}]'
+
+# Verify the changes were applied
+kubectl get kubedescheduler cluster -o yaml
+kubectl get machineconfig 50-worker-psi-metrics -o yaml
+
+# Clean up
+kubectl delete -f config/samples/loadaware_sample.yaml
+make kind-delete  # Delete the Kind cluster
+```
+
+## Available Profiles
+
+### example-profile
+A simple demonstration profile showing basic functionality.
+
+### load-aware-rebalancing
+Implements the VEP's load-aware rebalancing capability by configuring:
+1. **KubeDescheduler**: Enables KubeVirt-aware descheduling profiles with intelligent fallback
+2. **MachineConfig**: Enables PSI (Pressure Stall Information) metrics for load awareness
+
+**Profile Selection Logic:**
+- **OCP 5.32+**: Uses `KubeVirtRelieveAndMigrate` (GA) with profileCustomizations
+- **OCP 5.14-5.21**: Falls back to `DevKubeVirtRelieveAndMigrate` (dev preview)
+- **OCP 5.10**: Falls back to `LongLifecycle` (no profileCustomizations)
+
+**Profile Preservation:**
+- Preserves `AffinityAndTaints` and `SoftTopologyAndDuplicates` if they exist
+- Removes other conflicting profiles
+
+**Supported Config Overrides:**
+- `deschedulingIntervalSeconds`: How often to run descheduling (default: 1800 = 30 minutes)
+- `enablePSIMetrics`: Whether to enable PSI kernel metrics (default: true)
+- `devDeviationThresholds`: Deviation threshold for load balancing (default: AsymmetricLow)
+  - Valid values: Low, Medium, High, AsymmetricLow, AsymmetricMedium, AsymmetricHigh
+  - Only applies to KubeVirtRelieveAndMigrate and DevKubeVirtRelieveAndMigrate
+
+**Impact:**
+- Medium: Creates or updates descheduler configuration
+- High: Enables PSI metrics (requires node reboot in real OpenShift clusters)
 
 ### To Deploy on the cluster
+
+**Container Tool Support**
+
+The Makefile supports both Docker and Podman. It will auto-detect which tool is available (preferring Podman if both are installed). You can override this by setting the `CONTAINER_TOOL` environment variable:
+
+```sh
+# Auto-detect (uses podman if available, otherwise docker)
+make docker-build
+
+# Force use of docker
+make docker-build CONTAINER_TOOL=docker
+
+# Force use of podman
+make docker-build CONTAINER_TOOL=podman
+```
+
 **Build and push your image to the location specified by `IMG`:**
 
 ```sh
@@ -39,7 +118,7 @@ make docker-build docker-push IMG=<some-registry>/virt-advisor-operator:tag
 
 **NOTE:** This image ought to be published in the personal registry you specified.
 And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+Make sure you have the proper permission to the registry if the above commands don't work.
 
 **Install the CRDs into the cluster:**
 

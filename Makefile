@@ -1,6 +1,12 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
 
+# CONTAINER_TOOL usage:
+# The Makefile auto-detects podman or docker (preferring podman if both are available)
+# You can override this by setting CONTAINER_TOOL environment variable:
+#   make docker-build CONTAINER_TOOL=docker
+#   make docker-build CONTAINER_TOOL=podman
+
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
 GOBIN=$(shell go env GOPATH)/bin
@@ -9,10 +15,15 @@ GOBIN=$(shell go env GOBIN)
 endif
 
 # CONTAINER_TOOL defines the container tool to be used for building images.
-# Be aware that the target commands are only tested with Docker which is
-# scaffolded by default. However, you might want to replace it to use other
-# tools. (i.e. podman)
-CONTAINER_TOOL ?= docker
+# Auto-detect podman or docker, preferring podman if both are available.
+# Can be overridden by setting CONTAINER_TOOL environment variable.
+CONTAINER_TOOL ?= $(shell command -v podman 2>/dev/null || command -v docker 2>/dev/null || echo docker)
+
+# Detect if we're using podman or docker for conditional logic
+USING_PODMAN := $(shell $(CONTAINER_TOOL) --version 2>/dev/null | grep -q podman && echo true || echo false)
+
+# Helper variables
+comma := ,
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
 # Options are set to exit when a recipe line exits non-zero or a piped command fails.
@@ -38,6 +49,7 @@ all: build
 .PHONY: help
 help: ## Display this help.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
+	@printf "\n\033[1mContainer Tool:\033[0m $(CONTAINER_TOOL)\n"
 
 ##@ Development
 
@@ -113,32 +125,50 @@ run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
-# (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
+# (i.e. docker build --platform linux/arm64 or podman build --platform linux/arm64).
+# For docker, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
+docker-build: ## Build container image with the manager.
+	@echo "Building with $(CONTAINER_TOOL)..."
 	$(CONTAINER_TOOL) build -t ${IMG} .
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
+docker-push: ## Push container image with the manager.
+	@echo "Pushing with $(CONTAINER_TOOL)..."
 	$(CONTAINER_TOOL) push ${IMG}
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
-# architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:
-# - be able to use docker buildx. More info: https://docs.docker.com/build/buildx/
-# - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
-# - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
+# architectures. (i.e. make docker-buildx IMG=myregistry/myoperator:0.0.1).
+# For Docker: requires docker buildx with BuildKit enabled
+# For Podman: uses podman build --platform and manifest create
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
 PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
 .PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
+docker-buildx: ## Build and push container image for cross-platform support
+	@echo "Building multi-platform image with $(CONTAINER_TOOL)..."
+ifeq ($(USING_PODMAN),true)
+	@echo "Using podman manifest for multi-platform build"
+	# Podman approach: build for each platform and create a manifest
+	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
+	- $(CONTAINER_TOOL) manifest rm ${IMG} 2>/dev/null || true
+	$(CONTAINER_TOOL) manifest create ${IMG}
+	@for platform in $(subst $(comma), ,$(PLATFORMS)); do \
+		echo "Building for $$platform..."; \
+		$(CONTAINER_TOOL) build --platform=$$platform --manifest ${IMG} -f Dockerfile.cross . || exit 1; \
+	done
+	$(CONTAINER_TOOL) manifest push ${IMG}
+	rm Dockerfile.cross
+else
+	@echo "Using docker buildx for multi-platform build"
+	# Docker approach: use buildx
 	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
 	- $(CONTAINER_TOOL) buildx create --name virt-advisor-operator-builder
 	$(CONTAINER_TOOL) buildx use virt-advisor-operator-builder
 	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
 	- $(CONTAINER_TOOL) buildx rm virt-advisor-operator-builder
 	rm Dockerfile.cross
+endif
 
 .PHONY: build-installer
 build-installer: manifests generate kustomize ## Generate a consolidated YAML with CRDs and deployment.
@@ -151,6 +181,44 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 ifndef ignore-not-found
   ignore-not-found = false
 endif
+
+# Development cluster name
+DEV_CLUSTER_NAME ?= virt-advisor-dev
+
+.PHONY: kind-cluster
+kind-cluster: ## Create a Kind cluster for local development
+	@if ! command -v $(KIND) >/dev/null 2>&1; then \
+		echo "Installing kind..."; \
+		go install sigs.k8s.io/kind@latest; \
+	fi
+	@if $(KIND) get clusters 2>/dev/null | grep -q "^$(DEV_CLUSTER_NAME)$$"; then \
+		echo "Kind cluster '$(DEV_CLUSTER_NAME)' already exists"; \
+	else \
+		echo "Creating Kind cluster '$(DEV_CLUSTER_NAME)' with $(CONTAINER_TOOL)..."; \
+		if [ "$(CONTAINER_TOOL)" = "podman" ] || [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
+			KIND_EXPERIMENTAL_PROVIDER=podman $(KIND) create cluster --name $(DEV_CLUSTER_NAME); \
+		else \
+			$(KIND) create cluster --name $(DEV_CLUSTER_NAME); \
+		fi; \
+	fi
+
+.PHONY: kind-delete
+kind-delete: ## Delete the Kind development cluster
+	@if command -v $(KIND) >/dev/null 2>&1; then \
+		$(KIND) delete cluster --name $(DEV_CLUSTER_NAME); \
+	else \
+		echo "kind is not installed"; \
+	fi
+
+.PHONY: setup-mocks
+setup-mocks: ## Install mock CRDs and baseline resources for testing
+	@echo "Setting up mock resources..."
+	@./hack/setup-mocks.sh
+
+.PHONY: dev-setup
+dev-setup: kind-cluster install setup-mocks ## Complete development setup (cluster + CRDs + mocks)
+	@echo "Development environment ready!"
+	@echo "Run 'make run' to start the operator"
 
 .PHONY: install
 install: manifests kustomize ## Install CRDs into the K8s cluster specified in ~/.kube/config.
@@ -180,7 +248,7 @@ $(LOCALBIN):
 
 ## Tool Binaries
 KUBECTL ?= kubectl
-KIND ?= kind
+KIND ?= $(shell command -v kind 2>/dev/null || echo $(GOBIN)/kind)
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest

@@ -1,0 +1,32 @@
+apiVersion: hco.kubevirt.io/v1alpha1
+kind: ConfigurationPlan
+metadata:
+  labels:
+    app.kubernetes.io/name: virt-advisor-operator
+    app.kubernetes.io/managed-by: kustomize
+  # Name must match spec.profile (singleton pattern enforced by CEL validation)
+  name: load-aware-rebalancing
+spec:
+  # Profile name determines which configuration template to apply
+  # This profile enables load-aware scheduling by configuring:
+  # 1. KubeDescheduler to use LoadAware profile
+  # 2. MachineConfig to enable PSI (Pressure Stall Information) metrics
+  profile: load-aware-rebalancing
+
+  # Action controls the workflow:
+  # - "DryRun": Calculate changes and show diff without applying (start here!)
+  # - "Apply": Execute the planned changes (change to this after reviewing the diff)
+  action: DryRun
+
+  # FailurePolicy controls behavior when a step fails:
+  # - "Abort": Stop on first failure
+  # - "Continue": Attempt remaining steps even if one fails
+  failurePolicy: Abort
+
+  # ConfigOverrides allows fine-tuning specific parameters
+  # Supported overrides:
+  #   - deschedulingIntervalSeconds: How often to run descheduling (default: 1800)
+  #   - enablePSIMetrics: Whether to enable PSI metrics (default: true)
+  # configOverrides:
+  #   deschedulingIntervalSeconds: "1800"
+  #   enablePSIMetrics: "true"
