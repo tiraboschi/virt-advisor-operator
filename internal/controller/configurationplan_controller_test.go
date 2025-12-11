@@ -37,8 +37,8 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Name: resourceName,
+			// No namespace - ConfigurationPlan is cluster-scoped
 		}
 		configurationplan := &hcov1alpha1.ConfigurationPlan{}
 
@@ -48,22 +48,23 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 			if err != nil && errors.IsNotFound(err) {
 				resource := &hcov1alpha1.ConfigurationPlan{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
+						Name: resourceName,
+						// No namespace - ConfigurationPlan is cluster-scoped
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: hcov1alpha1.ConfigurationPlanSpec{
+						Profile: resourceName, // Must match metadata.name per CEL validation
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
+			By("Cleanup the specific resource instance ConfigurationPlan")
 			resource := &hcov1alpha1.ConfigurationPlan{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance ConfigurationPlan")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
@@ -77,8 +78,54 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+		})
+	})
+
+	Context("When validating singleton pattern", func() {
+		ctx := context.Background()
+
+		AfterEach(func() {
+			// Clean up any resources that might have been created
+			resource := &hcov1alpha1.ConfigurationPlan{}
+			err := k8sClient.Get(ctx, types.NamespacedName{Name: "mismatched-name"}, resource)
+			if err == nil {
+				_ = k8sClient.Delete(ctx, resource)
+			}
+		})
+
+		It("should reject ConfigurationPlan when name does not match profile", func() {
+			By("attempting to create a ConfigurationPlan with mismatched name and profile")
+			resource := &hcov1alpha1.ConfigurationPlan{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "mismatched-name",
+				},
+				Spec: hcov1alpha1.ConfigurationPlanSpec{
+					Profile: "different-profile",
+				},
+			}
+
+			err := k8sClient.Create(ctx, resource)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("To ensure a singleton pattern, the ConfigurationPlan name must exactly match the spec.profile"))
+		})
+
+		It("should accept ConfigurationPlan when name matches profile", func() {
+			By("creating a ConfigurationPlan with matching name and profile")
+			const matchingName = "matching-profile"
+			resource := &hcov1alpha1.ConfigurationPlan{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: matchingName,
+				},
+				Spec: hcov1alpha1.ConfigurationPlanSpec{
+					Profile: matchingName,
+				},
+			}
+
+			err := k8sClient.Create(ctx, resource)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Cleanup
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
 	})
 })

@@ -1,8 +1,26 @@
 # virt-advisor-operator
-// TODO(user): Add simple overview of use/purpose
+
+An operational governance layer for safe configuration of third-party integrations in KubeVirt environments.
 
 ## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+
+The virt-advisor-operator implements a declarative "Plan" pattern for managing configuration changes to external operators and cluster components. It provides a preview-and-approve workflow that enables cluster administrators to safely tune third-party components without direct ownership.
+
+### Key Features
+
+- **Preview & Approve Workflow**: DryRun mode calculates and displays proposed changes before applying them
+- **Profile-Based Configuration**: Select from predefined capability sets (e.g., "LoadAwareRebalancing")
+- **Drift Detection**: Monitors for configuration drift from the intended state
+- **Optimistic Locking**: Uses snapshot hashing to prevent conflicting changes
+- **Granular Control**: Fine-grained failure policies and per-item status tracking
+- **Safe Evolution**: Server-side apply ensures accurate diffs and controlled updates
+
+### Use Cases
+
+- Enabling advanced scheduling features (descheduler, load-aware rebalancing)
+- Configuring performance tuning profiles
+- Managing integration with monitoring and observability tools
+- Applying cluster-wide operational policies with preview capabilities
 
 ## Getting Started
 

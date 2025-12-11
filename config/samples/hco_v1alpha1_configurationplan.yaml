@@ -4,6 +4,23 @@ metadata:
   labels:
     app.kubernetes.io/name: virt-advisor-operator
     app.kubernetes.io/managed-by: kustomize
-  name: configurationplan-sample
+  # Name must match spec.profile (singleton pattern enforced by CEL validation)
+  name: load-aware-rebalancing
 spec:
-  # TODO(user): Add fields here
+  # Profile name determines which configuration template to apply
+  profile: load-aware-rebalancing
+
+  # Action controls the workflow:
+  # - "DryRun": Calculate changes and show diff without applying
+  # - "Apply": Execute the planned changes
+  action: DryRun
+
+  # FailurePolicy controls behavior when a step fails:
+  # - "Abort": Stop on first failure
+  # - "Continue": Attempt remaining steps even if one fails
+  failurePolicy: Abort
+
+  # ConfigOverrides allows fine-tuning specific parameters
+  # configOverrides:
+  #   schedulerInterval: "30s"
+  #   metricsPort: "8080"
