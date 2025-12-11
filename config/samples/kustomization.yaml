@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- hco_v1alpha1_configurationplan.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
