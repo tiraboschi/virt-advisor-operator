@@ -601,6 +601,112 @@ We considered using the Operator Lifecycle Manager (OLM) to bundle these configu
 Too dangerous for `MachineConfig` (reboot) changes.
 Risk of infinite reconciliation loops with other tools like ArgoCD.
 
+## Profile Configuration: Type-Safe Design
+
+### Problem Statement
+
+The initial design used a flat `configOverrides: map[string]string` for profile configuration. This approach has several scalability and usability issues:
+
+1. **No Schema Validation**: Typos are accepted silently (e.g., `enablePSImetrics` vs `enablePSIMetrics`)
+2. **No Type Safety**: Everything is a string, even booleans and integers
+3. **Poor Discoverability**: Users must read docs to know what's supported
+4. **Profiles Aren't Independent**: All share the same flat namespace
+5. **Scales Poorly**: Validation logic scattered across profiles
+
+### Solution: Clean Union Type with CEL Validation
+
+We adopted a **clean union type** approach that provides type safety while keeping profiles independent, without redundant fields.
+
+**API Design:**
+```go
+type ConfigurationPlanSpec struct {
+    // Profile selects the named capability (e.g., "load-aware-rebalancing")
+    Profile string `json:"profile"`
+
+    // Options holds tunable parameters for the selected profile
+    // CEL validation ensures only the field matching Profile is set
+    // +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'load-aware-rebalancing' ? has(self.options.loadAware) : true)"
+    Options *ProfileOptions `json:"options,omitempty"`
+}
+
+// ProfileOptions is a union of all possible profile configurations.
+// New profiles simply add a new field here.
+type ProfileOptions struct {
+    // LoadAware config (only valid when profile=load-aware-rebalancing)
+    LoadAware *LoadAwareConfig `json:"loadAware,omitempty"`
+
+    // Future profiles:
+    // HighDensity *HighDensityConfig `json:"highDensity,omitempty"`
+}
+
+type LoadAwareConfig struct {
+    // +kubebuilder:default=1800
+    // +kubebuilder:validation:Minimum=60
+    // +kubebuilder:validation:Maximum=86400
+    DeschedulingIntervalSeconds *int32 `json:"deschedulingIntervalSeconds,omitempty"`
+
+    // +kubebuilder:default=true
+    EnablePSIMetrics *bool `json:"enablePSIMetrics,omitempty"`
+
+    // +kubebuilder:default="AsymmetricLow"
+    // +kubebuilder:validation:Enum=Low;AsymmetricLow;High
+    DevDeviationThresholds *string `json:"devDeviationThresholds,omitempty"`
+}
+```
+
+**User Experience:**
+```yaml
+apiVersion: hco.kubevirt.io/v1alpha1
+kind: ConfigurationPlan
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  options:
+    loadAware:
+      deschedulingIntervalSeconds: 3600  # Integer, validated
+      enablePSIMetrics: true              # Boolean
+      devDeviationThresholds: High        # Enum, validated
+```
+
+**Benefits:**
+- ✅ **Type-Safe**: CRD validates types at admission time
+- ✅ **No Redundancy**: No need to repeat profile name in `options`
+- ✅ **Discoverable**: `kubectl explain ConfigurationPlan.spec.options.loadAware`
+- ✅ **IDE Support**: Autocomplete in YAML editors
+- ✅ **Profile Independence**: Each profile owns its config struct
+- ✅ **CEL Validation**: Ensures only the correct option field is set
+- ✅ **Self-Documenting**: Defaults and constraints visible in CRD
+
+**CEL Validation Rules:**
+1. When `spec.profile=load-aware-rebalancing`, only `options.loadAware` may be set
+2. Integer fields validated against min/max ranges (e.g., deschedulingIntervalSeconds: 60-86400)
+3. Enum fields validated against allowed values (e.g., devDeviationThresholds: Low|AsymmetricLow|High)
+4. Options is optional - if omitted, profile defaults are used
+
+**Adding New Profiles:**
+
+Adding a new profile is straightforward:
+
+1. Add config struct: `type HighDensityConfig struct { EnableSwap bool }`
+2. Add to union: `HighDensity *HighDensityConfig` in `ProfileOptions`
+3. Update CEL validation: Add rule for `profile == 'high-density'`
+4. Users automatically get: type validation, autocomplete, and documentation via `kubectl explain`
+
+**Example for a second profile:**
+```go
+// Add CEL rule:
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'high-density' ? !has(self.options.loadAware) : true)"
+
+type HighDensityConfig struct {
+    // +kubebuilder:default=true
+    EnableSwap bool `json:"enableSwap,omitempty"`
+}
+```
+
+This approach follows industry standards (Istio, Knative) and provides a future-proof, scalable configuration mechanism without redundancy.
+
 ## Open questions
 1. Should we implement this as an additional controller in the HCO pod? a completely independent pod executed with a different service account with fine grained RBAC?
 2. Should we use a CEL expression to bind the name of the object to the profile it intends to manage?

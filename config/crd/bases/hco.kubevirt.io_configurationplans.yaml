@@ -71,12 +71,6 @@ spec:
                   Only use this in emergency recovery scenarios or dev/test environments.
                   Defaults to false.
                 type: boolean
-              configOverrides:
-                additionalProperties:
-                  type: string
-                description: ConfigOverrides allows tuning specific parameters of
-                  the chosen profile.
-                type: object
               failurePolicy:
                 default: Abort
                 description: |-
@@ -86,6 +80,44 @@ spec:
                 - Abort
                 - Continue
                 type: string
+              options:
+                description: |-
+                  Options holds tunable parameters for the selected profile.
+                  Only the field matching the chosen Profile is allowed.
+                  This field is optional - if omitted, profile defaults will be used.
+                properties:
+                  loadAware:
+                    description: LoadAware config (only valid when profile=load-aware-rebalancing)
+                    properties:
+                      deschedulingIntervalSeconds:
+                        default: 1800
+                        description: |-
+                          DeschedulingIntervalSeconds controls how often descheduling runs.
+                          Minimum: 60 (1 minute)
+                          Maximum: 86400 (24 hours)
+                        format: int32
+                        maximum: 86400
+                        minimum: 60
+                        type: integer
+                      devDeviationThresholds:
+                        default: AsymmetricLow
+                        description: |-
+                          DevDeviationThresholds sets the load deviation sensitivity for descheduling.
+                          Controls how aggressive the descheduler is when detecting imbalanced nodes.
+                        enum:
+                        - Low
+                        - AsymmetricLow
+                        - High
+                        type: string
+                      enablePSIMetrics:
+                        default: true
+                        description: |-
+                          EnablePSIMetrics controls whether to configure PSI kernel parameter via MachineConfig.
+                          When enabled, creates a MachineConfig with psi=1 kernel argument.
+                          When disabled, the MachineConfig item is not included in the plan.
+                        type: boolean
+                    type: object
+                type: object
               profile:
                 description: |-
                   Profile is the named capability to activate.
@@ -113,15 +145,50 @@ spec:
             required:
             - profile
             type: object
+            x-kubernetes-validations:
+            - message: When profile is 'load-aware-rebalancing', only options.loadAware
+                may be set
+              rule: '!has(self.options) || (self.profile == ''load-aware-rebalancing''
+                ? has(self.options.loadAware) : true)'
           status:
             description: ConfigurationPlanStatus defines the observed state of ConfigurationPlan
             properties:
-              appliedConfigOverrides:
-                additionalProperties:
-                  type: string
+              appliedOptions:
                 description: |-
-                  AppliedConfigOverrides stores the config overrides that were used to generate
-                  the current plan items. Used to detect when spec.configOverrides changes.
+                  AppliedOptions stores the profile options that were used to generate
+                  the current plan items. Used to detect when spec.options changes.
+                properties:
+                  loadAware:
+                    description: LoadAware config (only valid when profile=load-aware-rebalancing)
+                    properties:
+                      deschedulingIntervalSeconds:
+                        default: 1800
+                        description: |-
+                          DeschedulingIntervalSeconds controls how often descheduling runs.
+                          Minimum: 60 (1 minute)
+                          Maximum: 86400 (24 hours)
+                        format: int32
+                        maximum: 86400
+                        minimum: 60
+                        type: integer
+                      devDeviationThresholds:
+                        default: AsymmetricLow
+                        description: |-
+                          DevDeviationThresholds sets the load deviation sensitivity for descheduling.
+                          Controls how aggressive the descheduler is when detecting imbalanced nodes.
+                        enum:
+                        - Low
+                        - AsymmetricLow
+                        - High
+                        type: string
+                      enablePSIMetrics:
+                        default: true
+                        description: |-
+                          EnablePSIMetrics controls whether to configure PSI kernel parameter via MachineConfig.
+                          When enabled, creates a MachineConfig with psi=1 kernel argument.
+                          When disabled, the MachineConfig item is not included in the plan.
+                        type: boolean
+                    type: object
                 type: object
               conditions:
                 description: Conditions represents the latest available observations

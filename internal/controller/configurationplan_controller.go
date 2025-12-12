@@ -130,14 +130,24 @@ func (r *ConfigurationPlanReconciler) handleDraftingPhase(ctx context.Context, c
 			fmt.Sprintf("Profile not found: %v", err))
 	}
 
-	// Validate config overrides
-	if err := profile.Validate(configPlan.Spec.ConfigOverrides); err != nil {
+	// Validate profile options match the selected profile
+	if err := profiles.ValidateOptions(configPlan.Spec.Profile, configPlan.Spec.Options); err != nil {
 		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhasePrerequisiteFailed,
-			fmt.Sprintf("Invalid config overrides: %v", err))
+			fmt.Sprintf("Invalid profile options: %v", err))
+	}
+
+	// Convert ProfileOptions to map for backward compatibility with existing Profile interface
+	// TODO: Update Profile interface to accept typed config directly
+	configMap := profiles.OptionsToMap(configPlan.Spec.Profile, configPlan.Spec.Options)
+
+	// Validate config
+	if err := profile.Validate(configMap); err != nil {
+		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhasePrerequisiteFailed,
+			fmt.Sprintf("Invalid config: %v", err))
 	}
 
 	// Generate plan items
-	items, err := profile.GeneratePlanItems(ctx, r.Client, configPlan.Spec.ConfigOverrides)
+	items, err := profile.GeneratePlanItems(ctx, r.Client, configMap)
 	if err != nil {
 		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
 			fmt.Sprintf("Failed to generate plan items: %v", err))
@@ -156,11 +166,8 @@ func (r *ConfigurationPlanReconciler) handleDraftingPhase(ctx context.Context, c
 	configPlan.Status.Items = items
 	configPlan.Status.SourceSnapshotHash = snapshotHash
 	configPlan.Status.OperatorVersion = OperatorVersion
-	// Store the configOverrides used to generate this plan
-	configPlan.Status.AppliedConfigOverrides = make(map[string]string)
-	for k, v := range configPlan.Spec.ConfigOverrides {
-		configPlan.Status.AppliedConfigOverrides[k] = v
-	}
+	// Store the options used to generate this plan
+	configPlan.Status.AppliedOptions = configPlan.Spec.Options
 
 	if err := r.Status().Update(ctx, configPlan); err != nil {
 		return fmt.Errorf("failed to update status with plan items: %w", err)
@@ -425,11 +432,11 @@ func (r *ConfigurationPlanReconciler) handleCompletedPhase(ctx context.Context, 
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Completed phase - monitoring for drift")
 
-	// Check if configOverrides have changed - if so, regenerate plan
-	if configOverridesChanged(configPlan.Spec.ConfigOverrides, configPlan.Status.AppliedConfigOverrides) {
-		logger.Info("ConfigOverrides have changed, regenerating plan")
+	// Check if options have changed - if so, regenerate plan
+	if optionsChanged(configPlan.Spec.Options, configPlan.Status.AppliedOptions) {
+		logger.Info("Options have changed, regenerating plan")
 		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseDrafting,
-			"ConfigOverrides changed - regenerating plan")
+			"Options changed - regenerating plan")
 	}
 
 	// Check if we have a stored snapshot hash
@@ -532,21 +539,70 @@ func (r *ConfigurationPlanReconciler) updatePhase(ctx context.Context, configPla
 	return r.Status().Update(ctx, configPlan)
 }
 
-// configOverridesChanged compares two config override maps to detect changes
-func configOverridesChanged(current, applied map[string]string) bool {
-	// If lengths differ, they've changed
-	if len(current) != len(applied) {
+// optionsChanged compares two ProfileOptions to detect changes
+func optionsChanged(current, applied *hcov1alpha1.ProfileOptions) bool {
+	// Both nil - no change
+	if current == nil && applied == nil {
+		return false
+	}
+
+	// One is nil, other is not - changed
+	if (current == nil) != (applied == nil) {
 		return true
 	}
 
-	// Check if all current keys/values exist in applied
-	for k, v := range current {
-		if appliedV, ok := applied[k]; !ok || appliedV != v {
+	// Compare LoadAware config
+	if (current.LoadAware == nil) != (applied.LoadAware == nil) {
+		return true
+	}
+
+	if current.LoadAware != nil && applied.LoadAware != nil {
+		// Compare fields
+		if !int32PtrEqual(current.LoadAware.DeschedulingIntervalSeconds, applied.LoadAware.DeschedulingIntervalSeconds) {
+			return true
+		}
+		if !boolPtrEqual(current.LoadAware.EnablePSIMetrics, applied.LoadAware.EnablePSIMetrics) {
+			return true
+		}
+		if !stringPtrEqual(current.LoadAware.DevDeviationThresholds, applied.LoadAware.DevDeviationThresholds) {
 			return true
 		}
 	}
 
+	// Future: compare other profile configs (HighDensity, etc.)
+
 	return false
+}
+
+// Helper functions for pointer comparison
+func int32PtrEqual(a, b *int32) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func boolPtrEqual(a, b *bool) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func stringPtrEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 // SetupWithManager sets up the controller with the Manager.

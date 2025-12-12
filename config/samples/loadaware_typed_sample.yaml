@@ -1,0 +1,49 @@
+apiVersion: hco.kubevirt.io/v1alpha1
+kind: ConfigurationPlan
+metadata:
+  labels:
+    app.kubernetes.io/name: virt-advisor-operator
+    app.kubernetes.io/managed-by: kustomize
+  # Name must match spec.profile (singleton pattern enforced by CEL validation)
+  name: load-aware-rebalancing
+spec:
+  # Profile name determines which configuration template to apply
+  profile: load-aware-rebalancing
+
+  # Action controls the workflow:
+  # - "DryRun": Calculate changes and show diff without applying (start here!)
+  # - "Apply": Execute the planned changes (change to this after reviewing the diff)
+  action: DryRun
+
+  # FailurePolicy controls behavior when a step fails:
+  # - "Abort": Stop on first failure
+  # - "Continue": Attempt remaining steps even if one fails
+  failurePolicy: Abort
+
+  # Options provides type-safe configuration for the selected profile
+  # Benefits:
+  # - Type validation (integers, booleans, enums)
+  # - IDE autocomplete via CRD schema
+  # - kubectl explain support
+  # - Admission-time validation via CEL
+  # This field is optional - if omitted, profile defaults will be used
+  options:
+    # Load-aware rebalancing specific configuration
+    # Only this field should be set when profile=load-aware-rebalancing
+    loadAware:
+      # How often to run descheduling (in seconds)
+      # Minimum: 60 (1 minute), Maximum: 86400 (24 hours), Default: 1800 (30 minutes)
+      deschedulingIntervalSeconds: 1800
+
+      # Whether to enable PSI metrics via MachineConfig
+      # When true, creates a MachineConfig with psi=1 kernel argument
+      # When false, skips the MachineConfig item (no PSI metrics)
+      # Default: true
+      enablePSIMetrics: true
+
+      # Load deviation sensitivity for descheduling
+      # - Low: Less aggressive, higher tolerance for imbalance
+      # - AsymmetricLow: Balanced (default)
+      # - High: More aggressive, lower tolerance for imbalance
+      # Default: AsymmetricLow
+      devDeviationThresholds: AsymmetricLow

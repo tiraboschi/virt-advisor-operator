@@ -23,10 +23,10 @@ spec:
   # - "Continue": Attempt remaining steps even if one fails
   failurePolicy: Abort
 
-  # ConfigOverrides allows fine-tuning specific parameters
-  # Supported overrides:
-  #   - deschedulingIntervalSeconds: How often to run descheduling (default: 1800)
-  #   - enablePSIMetrics: Whether to enable PSI metrics (default: true)
-  # configOverrides:
-  #   deschedulingIntervalSeconds: "1800"
-  #   enablePSIMetrics: "true"
+  # Options allows type-safe fine-tuning of profile parameters
+  # This field is optional - if omitted, profile defaults will be used
+  # options:
+  #   loadAware:
+  #     deschedulingIntervalSeconds: 1800  # Integer (60-86400), default: 1800
+  #     enablePSIMetrics: true              # Boolean, default: true
+  #     devDeviationThresholds: AsymmetricLow  # Enum: Low|AsymmetricLow|High

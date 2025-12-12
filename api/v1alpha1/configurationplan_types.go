@@ -45,6 +45,7 @@ const (
 )
 
 // ConfigurationPlanSpec defines the desired state of ConfigurationPlan
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'load-aware-rebalancing' ? has(self.options.loadAware) : true)",message="When profile is 'load-aware-rebalancing', only options.loadAware may be set"
 type ConfigurationPlanSpec struct {
 	// Profile is the named capability to activate.
 	// This field is immutable once set.
@@ -62,9 +63,11 @@ type ConfigurationPlanSpec struct {
 	// +kubebuilder:default="Abort"
 	FailurePolicy FailurePolicy `json:"failurePolicy,omitempty"`
 
-	// ConfigOverrides allows tuning specific parameters of the chosen profile.
+	// Options holds tunable parameters for the selected profile.
+	// Only the field matching the chosen Profile is allowed.
+	// This field is optional - if omitted, profile defaults will be used.
 	// +optional
-	ConfigOverrides map[string]string `json:"configOverrides,omitempty"`
+	Options *ProfileOptions `json:"options,omitempty"`
 
 	// BypassOptimisticLock disables staleness checks before execution.
 	// WARNING: This is dangerous! When true, the controller will apply configurations
@@ -91,6 +94,45 @@ type ConfigurationPlanSpec struct {
 	// Examples: "30m", "2h", "24h"
 	// +optional
 	WaitTimeout *metav1.Duration `json:"waitTimeout,omitempty"`
+}
+
+// ProfileOptions is a union of all possible profile configurations.
+// New profiles simply add a new field here.
+// CEL validation ensures only the field matching spec.profile is set.
+type ProfileOptions struct {
+	// LoadAware config (only valid when profile=load-aware-rebalancing)
+	// +optional
+	LoadAware *LoadAwareConfig `json:"loadAware,omitempty"`
+
+	// Future profiles will add their config types here:
+	// +optional
+	// HighDensity *HighDensityConfig `json:"highDensity,omitempty"`
+}
+
+// LoadAwareConfig contains typed configuration for the load-aware-rebalancing profile.
+type LoadAwareConfig struct {
+	// DeschedulingIntervalSeconds controls how often descheduling runs.
+	// Minimum: 60 (1 minute)
+	// Maximum: 86400 (24 hours)
+	// +kubebuilder:default=1800
+	// +kubebuilder:validation:Minimum=60
+	// +kubebuilder:validation:Maximum=86400
+	// +optional
+	DeschedulingIntervalSeconds *int32 `json:"deschedulingIntervalSeconds,omitempty"`
+
+	// EnablePSIMetrics controls whether to configure PSI kernel parameter via MachineConfig.
+	// When enabled, creates a MachineConfig with psi=1 kernel argument.
+	// When disabled, the MachineConfig item is not included in the plan.
+	// +kubebuilder:default=true
+	// +optional
+	EnablePSIMetrics *bool `json:"enablePSIMetrics,omitempty"`
+
+	// DevDeviationThresholds sets the load deviation sensitivity for descheduling.
+	// Controls how aggressive the descheduler is when detecting imbalanced nodes.
+	// +kubebuilder:default="AsymmetricLow"
+	// +kubebuilder:validation:Enum=Low;AsymmetricLow;High
+	// +optional
+	DevDeviationThresholds *string `json:"devDeviationThresholds,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;Failed;Drifted
@@ -183,10 +225,10 @@ type ConfigurationPlanStatus struct {
 	// +optional
 	OperatorVersion string `json:"operatorVersion,omitempty"`
 
-	// AppliedConfigOverrides stores the config overrides that were used to generate
-	// the current plan items. Used to detect when spec.configOverrides changes.
+	// AppliedOptions stores the profile options that were used to generate
+	// the current plan items. Used to detect when spec.options changes.
 	// +optional
-	AppliedConfigOverrides map[string]string `json:"appliedConfigOverrides,omitempty"`
+	AppliedOptions *ProfileOptions `json:"appliedOptions,omitempty"`
 
 	// Items is the ordered list of configuration steps to be executed.
 	// +listType=map
