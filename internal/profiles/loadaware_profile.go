@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
@@ -353,25 +353,21 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 		return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("failed to set spec: %w", err)
 	}
 
-	// Determine impact severity based on whether PSI is already enabled
-	existing, getErr := plan.GetUnstructured(ctx, c, MachineConfigGVK, mcName, "")
-	isNew := errors.IsNotFound(getErr)
-
+	// Determine impact severity based on effect-based validation
+	// Check if PSI is already effective in the merged MachineConfigPool config
+	poolName := "worker"
 	impactSeverity := "High - Node reboot required for kernel arguments"
 	message := fmt.Sprintf("MachineConfig '%s' will be configured to enable PSI metrics", mcName)
 
-	if !isNew && getErr == nil {
-		// Check if PSI is already enabled
-		currentKernelArgs, found, _ := unstructured.NestedStringSlice(existing.Object, "spec", "kernelArguments")
-		if found {
-			for _, arg := range currentKernelArgs {
-				if arg == psiKernelArg {
-					impactSeverity = "None - PSI metrics already enabled"
-					message = "MachineConfig already has PSI metrics enabled"
-					break
-				}
-			}
-		}
+	// EFFECT-BASED VALIDATION: Check if PSI is already effective in the pool
+	isPresent, _, err := ValidateKernelArgInPool(ctx, c, poolName, psiKernelArg)
+	if err != nil {
+		// Pool might not exist in test environments - log but continue
+		log.FromContext(ctx).V(1).Info("Could not validate kernel arg in pool", "pool", poolName, "error", err)
+	} else if isPresent {
+		// PSI is already effective in the merged config - no reboot needed
+		impactSeverity = "None - PSI metrics already enabled in pool"
+		message = fmt.Sprintf("PSI metrics already effective in MachineConfigPool '%s'", poolName)
 	}
 
 	// Use the builder to create the item with SSA-generated diff

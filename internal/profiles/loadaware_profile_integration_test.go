@@ -88,6 +88,11 @@ var _ = BeforeSuite(func() {
 	err = integrationK8sClient.Create(integrationCtx, machineconfigCRD)
 	Expect(err).NotTo(HaveOccurred())
 
+	By("loading MachineConfigPool CRD from file")
+	machineconfigpoolCRD := loadMachineConfigPoolCRDFromFile()
+	err = integrationK8sClient.Create(integrationCtx, machineconfigpoolCRD)
+	Expect(err).NotTo(HaveOccurred())
+
 	// Wait for CRDs to be established
 	time.Sleep(2 * time.Second)
 })
@@ -123,6 +128,20 @@ func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 	var crd apiextensionsv1.CustomResourceDefinition
 	err = yaml.Unmarshal(crdBytes, &crd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfig CRD")
+
+	return &crd
+}
+
+// Helper function to load MachineConfigPool CRD from file
+func loadMachineConfigPoolCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	// Load the actual MachineConfigPool CRD from the mocks directory
+	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "machineconfigpool_crd.yaml")
+	crdBytes, err := os.ReadFile(crdPath)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read MachineConfigPool CRD file")
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	err = yaml.Unmarshal(crdBytes, &crd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfigPool CRD")
 
 	return &crd
 }
@@ -681,6 +700,282 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			// Even with override, LongLifecycle should not get profileCustomizations
 			Expect(deschedulerItem.Diff).NotTo(ContainSubstring("profileCustomizations"), "should not set profileCustomizations for LongLifecycle")
 			Expect(deschedulerItem.Diff).NotTo(ContainSubstring("High"), "should not set devDeviationThresholds for LongLifecycle")
+		})
+	})
+
+	Describe("Effect-based validation of PSI kernel argument", func() {
+		var (
+			workerPoolName       = "worker"
+			renderedConfigName   = "rendered-worker-12345"
+			machineConfigName    = "99-worker-psi-karg"
+			machineConfigPoolGVK schema.GroupVersionKind
+			machineConfigGVK     schema.GroupVersionKind
+		)
+
+		BeforeEach(func() {
+			machineConfigPoolGVK = schema.GroupVersionKind{
+				Group:   "machineconfiguration.openshift.io",
+				Version: "v1",
+				Kind:    "MachineConfigPool",
+			}
+			machineConfigGVK = schema.GroupVersionKind{
+				Group:   "machineconfiguration.openshift.io",
+				Version: "v1",
+				Kind:    "MachineConfig",
+			}
+		})
+
+		It("should detect PSI already effective in pool and set impact to None", func() {
+			// Create a MachineConfigPool with a rendered config that includes psi=1
+			pool := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfigPool",
+					"metadata": map[string]interface{}{
+						"name": workerPoolName,
+					},
+					"status": map[string]interface{}{
+						"configuration": map[string]interface{}{
+							"name": renderedConfigName,
+						},
+					},
+				},
+			}
+			pool.SetGroupVersionKind(machineConfigPoolGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, pool)).To(Succeed())
+
+			// Create the rendered MachineConfig with psi=1
+			renderedMC := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfig",
+					"metadata": map[string]interface{}{
+						"name": renderedConfigName,
+					},
+					"spec": map[string]interface{}{
+						"kernelArguments": []interface{}{"psi=1"},
+					},
+				},
+			}
+			renderedMC.SetGroupVersionKind(machineConfigGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, renderedMC)).To(Succeed())
+
+			// Generate plan items
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(items).To(HaveLen(2)) // KubeDescheduler + MachineConfig
+
+			// Find the MachineConfig item
+			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			for i := range items {
+				if items[i].TargetRef.Name == machineConfigName {
+					mcItem = &items[i]
+					break
+				}
+			}
+			Expect(mcItem).NotTo(BeNil(), "MachineConfig item should be generated")
+
+			// Verify effect-based validation detected PSI is already present
+			Expect(mcItem.ImpactSeverity).To(Equal("None - PSI metrics already enabled in pool"))
+			Expect(mcItem.Message).To(ContainSubstring("PSI metrics already effective"))
+			Expect(mcItem.Message).To(ContainSubstring(workerPoolName))
+
+			// Cleanup
+			Expect(integrationK8sClient.Delete(integrationCtx, pool)).To(Succeed())
+			Expect(integrationK8sClient.Delete(integrationCtx, renderedMC)).To(Succeed())
+		})
+
+		It("should detect PSI not in rendered config and set impact to High", func() {
+			// Create a MachineConfigPool with a rendered config WITHOUT psi=1
+			pool := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfigPool",
+					"metadata": map[string]interface{}{
+						"name": workerPoolName,
+					},
+					"status": map[string]interface{}{
+						"configuration": map[string]interface{}{
+							"name": renderedConfigName,
+						},
+					},
+				},
+			}
+			pool.SetGroupVersionKind(machineConfigPoolGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, pool)).To(Succeed())
+
+			// Create the rendered MachineConfig WITHOUT psi=1
+			renderedMC := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfig",
+					"metadata": map[string]interface{}{
+						"name": renderedConfigName,
+					},
+					"spec": map[string]interface{}{
+						"kernelArguments": []interface{}{"debug", "other=value"},
+					},
+				},
+			}
+			renderedMC.SetGroupVersionKind(machineConfigGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, renderedMC)).To(Succeed())
+
+			// Generate plan items
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(items).To(HaveLen(2))
+
+			// Find the MachineConfig item
+			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			for i := range items {
+				if items[i].TargetRef.Name == machineConfigName {
+					mcItem = &items[i]
+					break
+				}
+			}
+			Expect(mcItem).NotTo(BeNil())
+
+			// Verify PSI is NOT detected, so reboot is required
+			Expect(mcItem.ImpactSeverity).To(Equal("High - Node reboot required for kernel arguments"))
+			Expect(mcItem.Message).To(ContainSubstring("will be configured to enable PSI metrics"))
+
+			// Cleanup
+			Expect(integrationK8sClient.Delete(integrationCtx, pool)).To(Succeed())
+			Expect(integrationK8sClient.Delete(integrationCtx, renderedMC)).To(Succeed())
+		})
+
+		It("should handle last occurrence wins for PSI (psi=0 then psi=1)", func() {
+			// Create pool and rendered config with psi=0 first, then psi=1 (last wins)
+			pool := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfigPool",
+					"metadata": map[string]interface{}{
+						"name": workerPoolName,
+					},
+					"status": map[string]interface{}{
+						"configuration": map[string]interface{}{
+							"name": renderedConfigName,
+						},
+					},
+				},
+			}
+			pool.SetGroupVersionKind(machineConfigPoolGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, pool)).To(Succeed())
+
+			renderedMC := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfig",
+					"metadata": map[string]interface{}{
+						"name": renderedConfigName,
+					},
+					"spec": map[string]interface{}{
+						"kernelArguments": []interface{}{"psi=0", "debug", "psi=1"},
+					},
+				},
+			}
+			renderedMC.SetGroupVersionKind(machineConfigGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, renderedMC)).To(Succeed())
+
+			// Generate plan items
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Find the MachineConfig item
+			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			for i := range items {
+				if items[i].TargetRef.Name == machineConfigName {
+					mcItem = &items[i]
+					break
+				}
+			}
+			Expect(mcItem).NotTo(BeNil())
+
+			// Last occurrence is psi=1, so it should be detected as already effective
+			Expect(mcItem.ImpactSeverity).To(Equal("None - PSI metrics already enabled in pool"))
+
+			// Cleanup
+			Expect(integrationK8sClient.Delete(integrationCtx, pool)).To(Succeed())
+			Expect(integrationK8sClient.Delete(integrationCtx, renderedMC)).To(Succeed())
+		})
+
+		It("should handle last occurrence wins for PSI (psi=1 then psi=0)", func() {
+			// Create pool and rendered config with psi=1 first, then psi=0 (last wins)
+			pool := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfigPool",
+					"metadata": map[string]interface{}{
+						"name": workerPoolName,
+					},
+					"status": map[string]interface{}{
+						"configuration": map[string]interface{}{
+							"name": renderedConfigName,
+						},
+					},
+				},
+			}
+			pool.SetGroupVersionKind(machineConfigPoolGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, pool)).To(Succeed())
+
+			renderedMC := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "machineconfiguration.openshift.io/v1",
+					"kind":       "MachineConfig",
+					"metadata": map[string]interface{}{
+						"name": renderedConfigName,
+					},
+					"spec": map[string]interface{}{
+						"kernelArguments": []interface{}{"psi=1", "debug", "psi=0"},
+					},
+				},
+			}
+			renderedMC.SetGroupVersionKind(machineConfigGVK)
+			Expect(integrationK8sClient.Create(integrationCtx, renderedMC)).To(Succeed())
+
+			// Generate plan items
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Find the MachineConfig item
+			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			for i := range items {
+				if items[i].TargetRef.Name == machineConfigName {
+					mcItem = &items[i]
+					break
+				}
+			}
+			Expect(mcItem).NotTo(BeNil())
+
+			// Last occurrence is psi=0, so psi=1 is NOT effective
+			Expect(mcItem.ImpactSeverity).To(Equal("High - Node reboot required for kernel arguments"))
+
+			// Cleanup
+			Expect(integrationK8sClient.Delete(integrationCtx, pool)).To(Succeed())
+			Expect(integrationK8sClient.Delete(integrationCtx, renderedMC)).To(Succeed())
+		})
+
+		It("should gracefully handle missing pool (log warning and continue)", func() {
+			// Don't create the pool - it doesn't exist
+
+			// Generate plan items should still succeed
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(items).To(HaveLen(2))
+
+			// Find the MachineConfig item
+			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			for i := range items {
+				if items[i].TargetRef.Name == machineConfigName {
+					mcItem = &items[i]
+					break
+				}
+			}
+			Expect(mcItem).NotTo(BeNil())
+
+			// Should default to High impact since we can't validate
+			Expect(mcItem.ImpactSeverity).To(Equal("High - Node reboot required for kernel arguments"))
 		})
 	})
 })
