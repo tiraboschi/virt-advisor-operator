@@ -66,6 +66,8 @@ const (
 	ReasonInProgress           = "InProgress"
 	ReasonNotInProgress        = "NotInProgress"
 	ReasonCompleted            = "Completed"
+	ReasonNotCompleted         = "NotCompleted"
+	ReasonReviewRequired       = "ReviewRequired"
 	ReasonNoDrift              = "NoDrift"
 	ReasonDriftDetected        = "DriftDetected"
 	ReasonConfigurationDrifted = "ConfigurationDrifted"
@@ -87,7 +89,9 @@ const (
 	MessageNotInProgressFailed       = "Plan application failed"
 	MessageNotInProgressPrereqFail   = "Cannot apply - prerequisites not met"
 	MessageNotInProgressDrifted      = "Waiting for manual intervention or aggressive remediation"
+	MessageReviewRequired            = "Plan ready for review. Change action to 'Apply' to execute."
 	MessageCompletedSuccess          = "Configuration successfully applied and in sync"
+	MessageCompletedNotYetApplied    = "Plan not yet applied"
 	MessageCompletedDrifted          = "Configuration is no longer in sync - drift detected"
 	MessageCompletedWithErrors       = "Plan completed but some items failed"
 	MessageCompletedFailed           = "Plan execution failed"
@@ -839,6 +843,13 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 	case advisorv1alpha1.PlanPhaseDrafting:
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionTrue, ReasonDrafting, MessageDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
+
+	case advisorv1alpha1.PlanPhaseReviewRequired:
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedNotYetApplied)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
+		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionTrue, ReasonReviewRequired, MessageReviewRequired)
 
 	case advisorv1alpha1.PlanPhaseInProgress:
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
