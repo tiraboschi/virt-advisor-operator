@@ -114,7 +114,7 @@ type LoadAwareConfig struct {
 	// DeschedulingIntervalSeconds controls how often descheduling runs.
 	// Minimum: 60 (1 minute)
 	// Maximum: 86400 (24 hours)
-	// +kubebuilder:default=1800
+	// +kubebuilder:default=60
 	// +kubebuilder:validation:Minimum=60
 	// +kubebuilder:validation:Maximum=86400
 	// +optional

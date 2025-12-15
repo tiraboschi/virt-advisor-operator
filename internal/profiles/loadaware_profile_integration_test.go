@@ -203,7 +203,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 
 			deschedulerItem := items[0]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("deschedulingIntervalSeconds"), "should show interval field")
-			Expect(deschedulerItem.Diff).To(ContainSubstring("1800"), "should show default interval value")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should show default interval value")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("profiles"), "should show profiles field")
 			// Should show one of the preferred profiles (exact profile depends on CRD schema)
 			Expect(deschedulerItem.Diff).To(MatchRegexp("KubeVirtRelieveAndMigrate|DevKubeVirtRelieveAndMigrate|LongLifecycle"), "should show a KubeVirt profile")
@@ -293,7 +293,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			deschedulerItem := items[0]
-			Expect(deschedulerItem.Diff).To(ContainSubstring("1800"), "should fall back to default 1800")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should fall back to default 60")
 		})
 
 		It("should fall back to default on negative interval", func() {
@@ -303,7 +303,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			deschedulerItem := items[0]
-			Expect(deschedulerItem.Diff).To(ContainSubstring("1800"), "should fall back to default 1800")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should fall back to default 60")
 		})
 	})
 

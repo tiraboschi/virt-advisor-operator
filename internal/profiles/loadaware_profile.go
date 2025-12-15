@@ -18,8 +18,8 @@ const (
 	// ProfileNameLoadAware is the name of the load-aware rebalancing profile
 	ProfileNameLoadAware = "load-aware-rebalancing"
 
-	// Default descheduling interval for load-aware profile (30 minutes)
-	defaultDeschedulingInterval = 1800
+	// Default descheduling interval for load-aware profile (1 minute)
+	defaultDeschedulingInterval = 60
 
 	// PSI kernel argument to enable pressure stall information
 	psiKernelArg = "psi=1"

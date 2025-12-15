@@ -45,13 +45,13 @@ make run
 kubectl apply -f config/samples/loadaware_sample.yaml
 
 # Watch the VirtPlatformConfig progress through phases
-kubectl get configurationplan load-aware-rebalancing -w
+kubectl get virtplatformconfig load-aware-rebalancing -w
 
 # View detailed status with diffs
-kubectl get configurationplan load-aware-rebalancing -o yaml
+kubectl get virtplatformconfig load-aware-rebalancing -o yaml
 
 # After reviewing the DryRun diff, approve and apply changes
-kubectl patch configurationplan load-aware-rebalancing \
+kubectl patch virtplatformconfig load-aware-rebalancing \
   --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"Apply"}]'
 
 # Verify the changes were applied

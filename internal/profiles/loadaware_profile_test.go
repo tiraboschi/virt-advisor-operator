@@ -144,8 +144,8 @@ func TestLoadAwareProfile_Constants(t *testing.T) {
 		t.Errorf("ProfileNameLoadAware = %q, want %q", ProfileNameLoadAware, "load-aware-rebalancing")
 	}
 
-	if defaultDeschedulingInterval != 1800 {
-		t.Errorf("defaultDeschedulingInterval = %d, want %d", defaultDeschedulingInterval, 1800)
+	if defaultDeschedulingInterval != 60 {
+		t.Errorf("defaultDeschedulingInterval = %d, want %d", defaultDeschedulingInterval, 60)
 	}
 
 	if psiKernelArg != "psi=1" {

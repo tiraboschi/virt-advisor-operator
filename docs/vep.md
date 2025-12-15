@@ -49,7 +49,7 @@ The workflow depends on the admin's desired level of control: **Interactive Revi
 **1. Discovery:**
 The Cluster Admin discovers available profiles via the CRD Schema.
 ```bash
-$ kubectl explain configplan.spec.profile
+$ kubectl explain virtplatformconfig.spec.profile
 # Valid values: "LoadAwareRebalancing", "HighDensitySwap"...
 ```
 
@@ -64,7 +64,7 @@ The `spec.action` field dictates the controller's behavior:
 As a cautious admin, I want to verify changes before they touch production.
 1.  I create a manifest with `action: DryRun`.
 2.  The Operator sets `status.phase = ReviewRequired` and populates `status.diff`.
-3.  I inspect the diff. I decide to proceed: `kubectl patch configplan ... -p '{"spec": {"action": "Apply"}}'`
+3.  I inspect the diff. I decide to proceed: `kubectl patch virtplatformconfig ... -p '{"spec": {"action": "Apply"}}'`
 4.  The Operator advances to execution.
 
 #### Story 2: Auto-Approval (Fire and Forget)
@@ -134,17 +134,17 @@ To prevent TOCTOU (Time-of-Check to Time-of-Use) conflict, we use a snapshot has
 ```mermaid
 sequenceDiagram
     participant User
-    participant ConfigPlan as VirtPlatformConfig
+    participant Plan as VirtPlatformConfig
     participant Operator
     participant Target as 3rd Party CR
 
     Note over Operator: 1. Action: DryRun
     Operator->>Target: Get Live Spec
     Operator->>Operator: Calc Diff & Hash(Spec) -> "Hash_A"
-    Operator->>ConfigPlan: Status: ReviewRequired, SourceHash: "Hash_A"
+    Operator->>Plan: Status: ReviewRequired, SourceHash: "Hash_A"
 
     Note over User: 2. Review & Approve
-    User->>ConfigPlan: Patch Action: Apply
+    User->>Plan: Patch Action: Apply
 
     Note over Operator: 3. Execution Guardrail
     Operator->>Target: Fetch Live Spec
@@ -152,9 +152,9 @@ sequenceDiagram
 
     alt Hash_A == Hash_B (Safe)
         Operator->>Target: Apply Patch
-        Operator->>ConfigPlan: Status: Applied
+        Operator->>Plan: Status: Applied
     else Hash_A != Hash_B (Stale!)
-        Operator->>ConfigPlan: Status: Failed (Reason: PlanStale)
+        Operator->>Plan: Status: Failed (Reason: PlanStale)
     end
 ```
 
@@ -640,7 +640,7 @@ type ProfileOptions struct {
 }
 
 type LoadAwareConfig struct {
-    // +kubebuilder:default=1800
+    // +kubebuilder:default=60
     // +kubebuilder:validation:Minimum=60
     // +kubebuilder:validation:Maximum=86400
     DeschedulingIntervalSeconds *int32 `json:"deschedulingIntervalSeconds,omitempty"`
@@ -665,9 +665,9 @@ spec:
   action: DryRun
   options:
     loadAware:
-      deschedulingIntervalSeconds: 3600  # Integer, validated
-      enablePSIMetrics: true              # Boolean
-      devDeviationThresholds: High        # Enum, validated
+      deschedulingIntervalSeconds: 120  # Integer, validated (default: 60)
+      enablePSIMetrics: true             # Boolean
+      devDeviationThresholds: High       # Enum, validated
 ```
 
 **Benefits:**

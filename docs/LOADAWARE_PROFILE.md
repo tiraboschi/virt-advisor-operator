@@ -98,7 +98,7 @@ status:
       +++ cluster (KubeDescheduler)
       @@ -1,1 +1,1 @@
        spec:
-         deschedulingIntervalSeconds: 1800
+         deschedulingIntervalSeconds: 60
          profileCustomizations:
            devDeviationThresholds: AsymmetricLow
            devEnableEvictionsInBackground: true
@@ -153,8 +153,8 @@ The profile supports the following overrides:
 spec:
   profile: load-aware-rebalancing
   configOverrides:
-    # Descheduling interval in seconds (default: 1800 = 30 minutes)
-    deschedulingIntervalSeconds: "1800"
+    # Descheduling interval in seconds (default: 60 = 1 minute)
+    deschedulingIntervalSeconds: "60"
 
     # Enable PSI metrics (default: true)
     # Set to "false" to skip MachineConfig changes

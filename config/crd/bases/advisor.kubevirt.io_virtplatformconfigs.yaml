@@ -91,7 +91,7 @@ spec:
                     description: LoadAware config (only valid when profile=load-aware-rebalancing)
                     properties:
                       deschedulingIntervalSeconds:
-                        default: 1800
+                        default: 60
                         description: |-
                           DeschedulingIntervalSeconds controls how often descheduling runs.
                           Minimum: 60 (1 minute)
@@ -163,7 +163,7 @@ spec:
                     description: LoadAware config (only valid when profile=load-aware-rebalancing)
                     properties:
                       deschedulingIntervalSeconds:
-                        default: 1800
+                        default: 60
                         description: |-
                           DeschedulingIntervalSeconds controls how often descheduling runs.
                           Minimum: 60 (1 minute)
