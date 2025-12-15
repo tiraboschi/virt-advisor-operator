@@ -87,6 +87,26 @@ func TestRegistry_Register(t *testing.T) {
 	}
 }
 
+// validateGetError checks that an error matches expectations
+func validateGetError(t *testing.T, err error, errContains string) {
+	t.Helper()
+	if errContains != "" && !contains(err.Error(), errContains) {
+		t.Errorf("Get() error = %v, should contain %q", err, errContains)
+	}
+}
+
+// validateGetSuccess checks that a successful Get returns the expected profile
+func validateGetSuccess(t *testing.T, got Profile, expectedName string) {
+	t.Helper()
+	if got == nil {
+		t.Error("Get() returned nil profile but expected non-nil")
+		return
+	}
+	if got.GetName() != expectedName {
+		t.Errorf("Get() returned profile %q, expected %q", got.GetName(), expectedName)
+	}
+}
+
 func TestRegistry_Get(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -132,21 +152,12 @@ func TestRegistry_Get(t *testing.T) {
 			}
 
 			if tt.wantErr && err != nil {
-				if tt.errContains != "" {
-					if !contains(err.Error(), tt.errContains) {
-						t.Errorf("Get() error = %v, should contain %q", err, tt.errContains)
-					}
-				}
+				validateGetError(t, err, tt.errContains)
+				return
 			}
 
-			if !tt.wantErr && got == nil {
-				t.Error("Get() returned nil profile but expected non-nil")
-			}
-
-			if !tt.wantErr && got != nil {
-				if got.GetName() != tt.getProfile {
-					t.Errorf("Get() returned profile %q, expected %q", got.GetName(), tt.getProfile)
-				}
+			if !tt.wantErr {
+				validateGetSuccess(t, got, tt.getProfile)
 			}
 		})
 	}

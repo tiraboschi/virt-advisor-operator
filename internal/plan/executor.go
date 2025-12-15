@@ -88,15 +88,3 @@ func executeMachineConfig(ctx context.Context, c client.Client, item *hcov1alpha
 	opts := DefaultApplyOptions()
 	return ApplyUnstructured(ctx, c, obj, opts)
 }
-
-// createObjectFromRef is no longer needed, kept for backwards compatibility
-func createObjectFromRef(ref hcov1alpha1.ObjectReference) (client.Object, error) {
-	gvk := schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind)
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(gvk)
-	obj.SetName(ref.Name)
-	if ref.Namespace != "" {
-		obj.SetNamespace(ref.Namespace)
-	}
-	return obj, nil
-}

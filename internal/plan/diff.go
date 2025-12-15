@@ -111,7 +111,7 @@ func generateCreationDiff(obj *unstructured.Unstructured) (string, error) {
 
 	// Format as unified diff (all additions)
 	var diff strings.Builder
-	diff.WriteString(fmt.Sprintf("--- /dev/null\n"))
+	diff.WriteString("--- /dev/null\n")
 	diff.WriteString(fmt.Sprintf("+++ %s (%s)\n", obj.GetName(), obj.GetKind()))
 	diff.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
 

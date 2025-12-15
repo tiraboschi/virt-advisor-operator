@@ -31,9 +31,6 @@ import (
 	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles"
-
-	// Import profiles to register them
-	_ "github.com/kubevirt/virt-advisor-operator/internal/profiles"
 )
 
 const (
@@ -199,55 +196,218 @@ func (r *ConfigurationPlanReconciler) handleReviewRequiredPhase(ctx context.Cont
 	return nil
 }
 
+// areAllItemsPending checks if all items in the plan are still in pending state
+func areAllItemsPending(items []hcov1alpha1.ConfigurationPlanItem) bool {
+	for _, item := range items {
+		if item.State != hcov1alpha1.ItemStatePending {
+			return false
+		}
+	}
+	return true
+}
+
+// checkOptimisticLock verifies that target resources haven't changed since plan generation
+func (r *ConfigurationPlanReconciler) checkOptimisticLock(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+	logger := log.FromContext(ctx)
+
+	// Only check on the FIRST entry to InProgress (when all items are still Pending)
+	if !areAllItemsPending(configPlan.Status.Items) || configPlan.Status.SourceSnapshotHash == "" {
+		return nil
+	}
+
+	// Check if bypass flag is set
+	if configPlan.Spec.BypassOptimisticLock {
+		logger.Info("WARNING: Optimistic lock check bypassed via spec.bypassOptimisticLock=true. "+
+			"Applying configuration without verifying cluster state has not changed since plan generation. "+
+			"This may overwrite manual changes or apply outdated configurations.",
+			"bypassOptimisticLock", true)
+		return nil
+	}
+
+	// Perform optimistic lock check
+	currentHash, err := plan.ComputeCurrentStateHash(ctx, r.Client, configPlan.Status.Items)
+	if err != nil {
+		logger.Error(err, "Failed to compute current state hash for optimistic locking check")
+		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
+			fmt.Sprintf("Failed to verify cluster state before execution: %v", err))
+	}
+
+	if currentHash != configPlan.Status.SourceSnapshotHash {
+		logger.Info("Plan is stale! Target resources have been modified since plan generation",
+			"stored_hash", configPlan.Status.SourceSnapshotHash,
+			"current_hash", currentHash)
+		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
+			"Plan is stale: target resources have been modified since plan generation. "+
+				"Please regenerate the plan by changing action to DryRun, then review and re-approve.")
+	}
+
+	logger.V(1).Info("Optimistic lock verification passed - cluster state unchanged")
+	return nil
+}
+
+// handleItemFailure updates item state to failed and checks failure policy
+func (r *ConfigurationPlanReconciler) handleItemFailure(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem, errMsg string, err error) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	now := metav1.Now()
+	item.LastTransitionTime = &now
+	item.State = hcov1alpha1.ItemStateFailed
+	item.Message = errMsg
+
+	if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
+		logger.Error(updateErr, "Failed to update item failure status")
+	}
+
+	if configPlan.Spec.FailurePolicy == hcov1alpha1.FailurePolicyAbort {
+		logger.Info("Aborting due to failure policy", "policy", configPlan.Spec.FailurePolicy)
+		return true, r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
+			fmt.Sprintf("Item '%s' failed: %v", item.Name, err))
+	}
+
+	return false, nil
+}
+
+// processItemExecution executes a plan item and handles the result
+func (r *ConfigurationPlanReconciler) processItemExecution(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem) (shouldAbort bool, shouldContinue bool, err error) {
+	logger := log.FromContext(ctx)
+
+	// Mark as in progress
+	if item.State == hcov1alpha1.ItemStatePending {
+		item.State = hcov1alpha1.ItemStateInProgress
+		item.Message = "Applying configuration..."
+		now := metav1.Now()
+		item.LastTransitionTime = &now
+
+		if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
+			logger.Error(updateErr, "Failed to update item to InProgress", "item", item.Name)
+		}
+	}
+
+	// Execute the item
+	logger.Info("Executing plan item", "item", item.Name, "target", fmt.Sprintf("%s/%s", item.TargetRef.Kind, item.TargetRef.Name))
+	execErr := plan.ExecuteItem(ctx, r.Client, item)
+
+	if execErr != nil {
+		logger.Error(execErr, "Failed to execute plan item", "item", item.Name)
+		abort, err := r.handleItemFailure(ctx, configPlan, item, fmt.Sprintf("Failed to apply: %v", execErr), execErr)
+		return abort, !abort, err
+	}
+
+	return false, false, nil
+}
+
+// checkItemHealth checks item health and handles wait/timeout logic
+// Returns (shouldContinue, error) where shouldContinue indicates whether to continue to next item
+func (r *ConfigurationPlanReconciler) checkItemHealth(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	waitManager := plan.NewWaitStrategyManager()
+	progressMsg, isHealthy, needsWait, healthErr := waitManager.CheckHealthy(ctx, r.Client, item)
+
+	if healthErr != nil {
+		logger.Error(healthErr, "Failed to check resource health", "item", item.Name)
+		abort, err := r.handleItemFailure(ctx, configPlan, item, fmt.Sprintf("Health check failed: %v", healthErr), healthErr)
+		if abort {
+			return false, err
+		}
+		return true, nil
+	}
+
+	if needsWait && !isHealthy {
+		abort, shouldContinue, err := r.handleItemWaitTimeout(ctx, configPlan, item, progressMsg)
+		if abort {
+			return false, err
+		}
+		return shouldContinue, nil
+	}
+
+	// Resource is healthy (or doesn't need waiting)
+	now := metav1.Now()
+	item.LastTransitionTime = &now
+	item.State = hcov1alpha1.ItemStateCompleted
+	item.Message = progressMsg
+
+	if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
+		return false, fmt.Errorf("failed to update item success status: %w", updateErr)
+	}
+
+	logger.Info("Successfully completed plan item", "item", item.Name, "message", progressMsg)
+	return false, nil
+}
+
+// handleItemWaitTimeout handles timeout logic for items waiting to become healthy
+func (r *ConfigurationPlanReconciler) handleItemWaitTimeout(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem, progressMsg string) (shouldAbort bool, shouldContinue bool, err error) {
+	logger := log.FromContext(ctx)
+
+	// Check if we've exceeded the optional waitTimeout
+	if configPlan.Spec.WaitTimeout != nil && item.LastTransitionTime != nil {
+		elapsed := time.Since(item.LastTransitionTime.Time)
+		timeout := configPlan.Spec.WaitTimeout.Duration
+
+		if elapsed > timeout {
+			logger.Info("Resource wait timeout exceeded", "item", item.Name, "elapsed", elapsed, "timeout", timeout)
+			abort, err := r.handleItemFailure(ctx, configPlan, item,
+				fmt.Sprintf("Timeout waiting for resource to become healthy (waited %v, timeout %v): %s",
+					elapsed.Round(time.Second), timeout, progressMsg),
+				fmt.Errorf("timeout after %v", elapsed.Round(time.Second)))
+			return abort, !abort, err
+		}
+	}
+
+	// Still within timeout (or no timeout set) - update status and requeue
+	logger.Info("Resource not yet healthy, will recheck on next reconciliation", "item", item.Name, "message", progressMsg)
+	item.Message = progressMsg
+
+	if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
+		logger.Error(updateErr, "Failed to update item progress status")
+	}
+
+	return false, true, nil
+}
+
+// areAllItemsCompleted checks if all items are either completed or failed
+func areAllItemsCompleted(items []hcov1alpha1.ConfigurationPlanItem) bool {
+	for _, item := range items {
+		if item.State != hcov1alpha1.ItemStateCompleted && item.State != hcov1alpha1.ItemStateFailed {
+			return false
+		}
+	}
+	return true
+}
+
+// finalizeInProgressPhase handles final completion logic with drift detection
+func (r *ConfigurationPlanReconciler) finalizeInProgressPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, hasFailures bool) error {
+	logger := log.FromContext(ctx)
+
+	// Compute snapshot hash of current cluster state for drift detection
+	currentStateHash, err := plan.ComputeCurrentStateHash(ctx, r.Client, configPlan.Status.Items)
+	if err != nil {
+		logger.Error(err, "Failed to compute current state hash for drift detection")
+		// Continue anyway - drift detection is not critical for completion
+	} else {
+		configPlan.Status.SourceSnapshotHash = currentStateHash
+		logger.Info("Updated snapshot hash for drift detection", "hash", currentStateHash)
+	}
+
+	if hasFailures {
+		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseCompletedWithErrors,
+			"Plan completed with some errors")
+	}
+	return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseCompleted,
+		"All items applied successfully")
+}
+
 // handleInProgressPhase applies the configuration items
 func (r *ConfigurationPlanReconciler) handleInProgressPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling InProgress phase")
 
 	// OPTIMISTIC LOCKING: Verify that the target resources haven't changed
-	// since the plan was generated (TOCTOU protection)
-	//
-	// Only check on the FIRST entry to InProgress (when all items are still Pending).
-	// Once we start executing items, we're modifying the cluster ourselves, so the
-	// hash will naturally change - that's expected and not a stale plan scenario.
-	allPending := true
-	for _, item := range configPlan.Status.Items {
-		if item.State != hcov1alpha1.ItemStatePending {
-			allPending = false
-			break
-		}
-	}
-
-	if allPending && configPlan.Status.SourceSnapshotHash != "" {
-		// Check if bypass flag is set
-		if configPlan.Spec.BypassOptimisticLock {
-			logger.Info("WARNING: Optimistic lock check bypassed via spec.bypassOptimisticLock=true. "+
-				"Applying configuration without verifying cluster state has not changed since plan generation. "+
-				"This may overwrite manual changes or apply outdated configurations.",
-				"bypassOptimisticLock", true)
-		} else {
-			// Perform optimistic lock check
-			currentHash, err := plan.ComputeCurrentStateHash(ctx, r.Client, configPlan.Status.Items)
-			if err != nil {
-				logger.Error(err, "Failed to compute current state hash for optimistic locking check")
-				return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
-					fmt.Sprintf("Failed to verify cluster state before execution: %v", err))
-			}
-
-			if currentHash != configPlan.Status.SourceSnapshotHash {
-				logger.Info("Plan is stale! Target resources have been modified since plan generation",
-					"stored_hash", configPlan.Status.SourceSnapshotHash,
-					"current_hash", currentHash)
-				return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
-					"Plan is stale: target resources have been modified since plan generation. "+
-						"Please regenerate the plan by changing action to DryRun, then review and re-approve.")
-			}
-			logger.V(1).Info("Optimistic lock verification passed - cluster state unchanged")
-		}
+	if err := r.checkOptimisticLock(ctx, configPlan); err != nil {
+		return err
 	}
 
 	// Apply each pending item
-	allCompleted := true
 	hasFailures := false
 
 	for i := range configPlan.Status.Items {
@@ -261,167 +421,34 @@ func (r *ConfigurationPlanReconciler) handleInProgressPhase(ctx context.Context,
 			continue
 		}
 
-		// Mark as in progress
-		if item.State == hcov1alpha1.ItemStatePending {
-			item.State = hcov1alpha1.ItemStateInProgress
-			item.Message = "Applying configuration..."
-			now := metav1.Now()
-			item.LastTransitionTime = &now
-
-			if err := r.Status().Update(ctx, configPlan); err != nil {
-				logger.Error(err, "Failed to update item to InProgress", "item", item.Name)
-			}
-		}
-
 		// Execute the item
-		logger.Info("Executing plan item", "item", item.Name, "target", fmt.Sprintf("%s/%s", item.TargetRef.Kind, item.TargetRef.Name))
-		err := plan.ExecuteItem(ctx, r.Client, item)
-
+		shouldAbort, shouldContinue, err := r.processItemExecution(ctx, configPlan, item)
 		if err != nil {
-			logger.Error(err, "Failed to execute plan item", "item", item.Name)
-			now := metav1.Now()
-			item.LastTransitionTime = &now
-			item.State = hcov1alpha1.ItemStateFailed
-			item.Message = fmt.Sprintf("Failed to apply: %v", err)
+			return err
+		}
+		if shouldAbort {
+			return err
+		}
+		if shouldContinue {
 			hasFailures = true
-
-			// Update status with failure
-			if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
-				logger.Error(updateErr, "Failed to update item failure status")
-			}
-
-			// Check failure policy
-			if configPlan.Spec.FailurePolicy == hcov1alpha1.FailurePolicyAbort {
-				logger.Info("Aborting due to failure policy", "policy", configPlan.Spec.FailurePolicy)
-				return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
-					fmt.Sprintf("Item '%s' failed: %v", item.Name, err))
-			}
-
-			// Continue policy - keep going
-			allCompleted = false
 			continue
 		}
 
-		// Item applied successfully - now check health (single check, no blocking)
+		// Check health
 		logger.V(1).Info("Item applied, checking health", "item", item.Name)
-
-		waitManager := plan.NewWaitStrategyManager()
-		progressMsg, isHealthy, needsWait, healthErr := waitManager.CheckHealthy(ctx, r.Client, item)
-
+		//nolint:staticcheck // SA4006: needsRetry is used on line below, linter false positive
+		needsRetry, healthErr := r.checkItemHealth(ctx, configPlan, item)
 		if healthErr != nil {
-			logger.Error(healthErr, "Failed to check resource health", "item", item.Name)
-			now := metav1.Now()
-			item.LastTransitionTime = &now
-			item.State = hcov1alpha1.ItemStateFailed
-			item.Message = fmt.Sprintf("Health check failed: %v", healthErr)
-			hasFailures = true
-
-			// Update status with failure
-			if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
-				logger.Error(updateErr, "Failed to update item failure status")
-			}
-
-			// Check failure policy
-			if configPlan.Spec.FailurePolicy == hcov1alpha1.FailurePolicyAbort {
-				logger.Info("Aborting due to failure policy", "policy", configPlan.Spec.FailurePolicy)
-				return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
-					fmt.Sprintf("Item '%s' health check failed: %v", item.Name, healthErr))
-			}
-
-			// Continue policy - keep going
-			allCompleted = false
+			return healthErr
+		}
+		if needsRetry {
 			continue
 		}
-
-		if needsWait && !isHealthy {
-			// Resource needs more time to become healthy
-			// Check if we've exceeded the optional waitTimeout
-			if configPlan.Spec.WaitTimeout != nil && item.LastTransitionTime != nil {
-				elapsed := time.Since(item.LastTransitionTime.Time)
-				timeout := configPlan.Spec.WaitTimeout.Duration
-
-				if elapsed > timeout {
-					// Timeout exceeded
-					logger.Info("Resource wait timeout exceeded", "item", item.Name, "elapsed", elapsed, "timeout", timeout)
-					now := metav1.Now()
-					item.LastTransitionTime = &now
-					item.State = hcov1alpha1.ItemStateFailed
-					item.Message = fmt.Sprintf("Timeout waiting for resource to become healthy (waited %v, timeout %v): %s",
-						elapsed.Round(time.Second), timeout, progressMsg)
-					hasFailures = true
-
-					// Update status with failure
-					if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
-						logger.Error(updateErr, "Failed to update item timeout status")
-					}
-
-					// Check failure policy
-					if configPlan.Spec.FailurePolicy == hcov1alpha1.FailurePolicyAbort {
-						logger.Info("Aborting due to failure policy", "policy", configPlan.Spec.FailurePolicy)
-						return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseFailed,
-							fmt.Sprintf("Item '%s' timeout after %v", item.Name, elapsed.Round(time.Second)))
-					}
-
-					// Continue policy - keep going
-					allCompleted = false
-					continue
-				}
-			}
-
-			// Still within timeout (or no timeout set) - update status and requeue
-			logger.Info("Resource not yet healthy, will recheck on next reconciliation", "item", item.Name, "message", progressMsg)
-			item.Message = progressMsg
-			// Keep state as InProgress
-			// Don't update LastTransitionTime - we want to track total wait time
-
-			if err := r.Status().Update(ctx, configPlan); err != nil {
-				logger.Error(err, "Failed to update item progress status")
-			}
-
-			// Mark as not completed so we requeue
-			allCompleted = false
-			continue
-		}
-
-		// Resource is healthy (or doesn't need waiting)
-		now := metav1.Now()
-		item.LastTransitionTime = &now
-		item.State = hcov1alpha1.ItemStateCompleted
-		item.Message = progressMsg
-
-		if err := r.Status().Update(ctx, configPlan); err != nil {
-			return fmt.Errorf("failed to update item success status: %w", err)
-		}
-
-		logger.Info("Successfully completed plan item", "item", item.Name, "message", progressMsg)
 	}
 
 	// Check overall completion status
-	for i := range configPlan.Status.Items {
-		if configPlan.Status.Items[i].State != hcov1alpha1.ItemStateCompleted &&
-			configPlan.Status.Items[i].State != hcov1alpha1.ItemStateFailed {
-			allCompleted = false
-			break
-		}
-	}
-
-	if allCompleted {
-		// Compute snapshot hash of current cluster state for drift detection
-		currentStateHash, err := plan.ComputeCurrentStateHash(ctx, r.Client, configPlan.Status.Items)
-		if err != nil {
-			logger.Error(err, "Failed to compute current state hash for drift detection")
-			// Continue anyway - drift detection is not critical for completion
-		} else {
-			configPlan.Status.SourceSnapshotHash = currentStateHash
-			logger.Info("Updated snapshot hash for drift detection", "hash", currentStateHash)
-		}
-
-		if hasFailures {
-			return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseCompletedWithErrors,
-				"Plan completed with some errors")
-		}
-		return r.updatePhase(ctx, configPlan, hcov1alpha1.PlanPhaseCompleted,
-			"All items applied successfully")
+	if areAllItemsCompleted(configPlan.Status.Items) {
+		return r.finalizeInProgressPhase(ctx, configPlan, hasFailures)
 	}
 
 	return nil
