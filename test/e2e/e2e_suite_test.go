@@ -81,9 +81,42 @@ var _ = BeforeSuite(func() {
 			_, _ = fmt.Fprintf(GinkgoWriter, "WARNING: CertManager is already installed. Skipping installation...\n")
 		}
 	}
+
+	// Install operator CRDs so they're available for all test suites
+	By("installing operator CRDs")
+	cmd = exec.Command("make", "install")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install operator CRDs")
+
+	// Create namespace for the operator
+	By("creating operator namespace")
+	cmd = exec.Command("kubectl", "create", "ns", "virt-advisor-operator-system")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create operator namespace")
+
+	// Deploy the controller so it's available for all test suites
+	By("deploying the controller-manager")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", projectImage))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 })
 
 var _ = AfterSuite(func() {
+	// Undeploy the controller
+	_, _ = fmt.Fprintf(GinkgoWriter, "Undeploying controller-manager...\n")
+	cmd := exec.Command("make", "undeploy")
+	_, _ = utils.Run(cmd)
+
+	// Uninstall operator CRDs
+	_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling operator CRDs...\n")
+	cmd = exec.Command("make", "uninstall")
+	_, _ = utils.Run(cmd)
+
+	// Delete operator namespace
+	_, _ = fmt.Fprintf(GinkgoWriter, "Deleting operator namespace...\n")
+	cmd = exec.Command("kubectl", "delete", "ns", "virt-advisor-operator-system")
+	_, _ = utils.Run(cmd)
+
 	// Teardown CertManager after the suite if not skipped and if it was not already installed
 	if !skipCertManagerInstall && !isCertManagerAlreadyInstalled {
 		_, _ = fmt.Fprintf(GinkgoWriter, "Uninstalling CertManager...\n")
