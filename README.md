@@ -10,8 +10,14 @@ The virt-advisor-operator implements a declarative "Plan" pattern for managing c
 
 - **Preview & Approve Workflow**: DryRun mode calculates and displays proposed changes before applying them
 - **Profile-Based Configuration**: Select from predefined capability sets (e.g., "LoadAwareRebalancing")
+- **Plugin Architecture for Drift Detection**:
+  - Each profile declares which resources it manages via `GetManagedResourceTypes()`
+  - Controller automatically creates watches for all managed resource types
+  - Memory-optimized with predicate filtering to only cache managed resources
+  - Adding new profiles automatically registers their watches - no manual configuration needed
 - **Drift Detection & Remediation**:
-  - Monitors for configuration drift during and after application
+  - Automatically monitors for configuration drift on all managed resources
+  - Watches trigger immediate reconciliation when managed resources change
   - Automatically transitions to `Drifted` phase when drift is detected
   - Supports manual remediation workflow (default) or automatic drift correction (aggressive mode)
   - Prevents fighting with other controllers or manual changes

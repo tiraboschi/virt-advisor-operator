@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -44,6 +45,55 @@ import (
 const (
 	// OperatorVersion is the current version of the operator logic
 	OperatorVersion = "v0.1.0"
+)
+
+// Condition types
+const (
+	ConditionTypeDrafting     = "Drafting"
+	ConditionTypeInProgress   = "InProgress"
+	ConditionTypeCompleted    = "Completed"
+	ConditionTypeDrifted      = "Drifted"
+	ConditionTypeFailed       = "Failed"
+	ConditionTypeReviewReq    = "ReviewRequired"
+	ConditionTypePrereqFail   = "PrerequisiteFailed"
+	ConditionTypeCompletedErr = "CompletedWithErrors"
+)
+
+// Condition reasons
+const (
+	ReasonDrafting             = "Drafting"
+	ReasonNotDrafting          = "NotDrafting"
+	ReasonInProgress           = "InProgress"
+	ReasonNotInProgress        = "NotInProgress"
+	ReasonCompleted            = "Completed"
+	ReasonNoDrift              = "NoDrift"
+	ReasonDriftDetected        = "DriftDetected"
+	ReasonConfigurationDrifted = "ConfigurationDrifted"
+	ReasonFailed               = "Failed"
+	ReasonCompletedWithErrors  = "CompletedWithErrors"
+	ReasonPrerequisitesFailed  = "PrerequisitesFailed"
+)
+
+// Condition messages
+const (
+	MessageDrafting                  = "Generating plan from profile"
+	MessageNotDrafting               = "Plan generation completed"
+	MessageNotDraftingFailed         = "Plan generation completed or failed"
+	MessageNotDraftingPrereqFail     = "Cannot generate plan - prerequisites not met"
+	MessageInProgress                = "Applying plan configuration"
+	MessageNotInProgress             = "Plan is not being applied"
+	MessageNotInProgressCompleted    = "Plan application completed"
+	MessageNotInProgressCompletedErr = "Plan application completed with errors"
+	MessageNotInProgressFailed       = "Plan application failed"
+	MessageNotInProgressPrereqFail   = "Cannot apply - prerequisites not met"
+	MessageNotInProgressDrifted      = "Waiting for manual intervention or aggressive remediation"
+	MessageCompletedSuccess          = "Configuration successfully applied and in sync"
+	MessageCompletedDrifted          = "Configuration is no longer in sync - drift detected"
+	MessageCompletedWithErrors       = "Plan completed but some items failed"
+	MessageCompletedFailed           = "Plan execution failed"
+	MessageCompletedPrereqFailed     = "Required CRDs not installed"
+	MessageNoDrift                   = "Configuration is in sync with desired state"
+	MessageDriftDetected             = "Configuration has drifted from desired state"
 )
 
 // VirtPlatformConfigReconciler reconciles a VirtPlatformConfig object
@@ -452,7 +502,7 @@ func (r *VirtPlatformConfigReconciler) finalizeInProgressPhase(ctx context.Conte
 	for i := range configPlan.Status.Items {
 		item := &configPlan.Status.Items[i]
 		if item.State == advisorv1alpha1.ItemStateCompleted &&
-		   item.Message == "Configuration has drifted from desired state" {
+			item.Message == "Configuration has drifted from desired state" {
 			hasDrift = true
 			logger.Info("Item has drifted", "item", item.Name)
 			break
@@ -553,7 +603,7 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 	for i := range configPlan.Status.Items {
 		item := &configPlan.Status.Items[i]
 		if item.State == advisorv1alpha1.ItemStateCompleted &&
-		   item.Message == "Configuration has drifted from desired state" {
+			item.Message == "Configuration has drifted from desired state" {
 			logger.Info("Item drift already detected, transitioning to Drifted phase", "item", item.Name)
 			return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseDrifted,
 				"Configuration drift detected - one or more items have drifted from desired state")
@@ -593,27 +643,35 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 	needsUpdate := false
 	for i, c := range configPlan.Status.Conditions {
 		switch c.Type {
-		case "Drifted":
+		case ConditionTypeDrifted:
 			if c.Status == metav1.ConditionTrue {
 				configPlan.Status.Conditions[i].Status = metav1.ConditionFalse
-				configPlan.Status.Conditions[i].Reason = "NoDrift"
-				configPlan.Status.Conditions[i].Message = "Configuration is in sync with desired state"
+				configPlan.Status.Conditions[i].Reason = ReasonNoDrift
+				configPlan.Status.Conditions[i].Message = MessageNoDrift
 				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
 				needsUpdate = true
 			}
-		case "Drafting":
+		case ConditionTypeDrafting:
 			if c.Status == metav1.ConditionTrue {
 				configPlan.Status.Conditions[i].Status = metav1.ConditionFalse
-				configPlan.Status.Conditions[i].Reason = "NotDrafting"
-				configPlan.Status.Conditions[i].Message = "Plan generation completed"
+				configPlan.Status.Conditions[i].Reason = ReasonNotDrafting
+				configPlan.Status.Conditions[i].Message = MessageNotDrafting
 				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
 				needsUpdate = true
 			}
-		case "InProgress":
+		case ConditionTypeInProgress:
 			if c.Status == metav1.ConditionTrue {
 				configPlan.Status.Conditions[i].Status = metav1.ConditionFalse
-				configPlan.Status.Conditions[i].Reason = "NotInProgress"
-				configPlan.Status.Conditions[i].Message = "Plan application completed"
+				configPlan.Status.Conditions[i].Reason = ReasonNotInProgress
+				configPlan.Status.Conditions[i].Message = MessageNotInProgressCompleted
+				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
+				needsUpdate = true
+			}
+		case ConditionTypeCompleted:
+			if c.Status == metav1.ConditionFalse {
+				configPlan.Status.Conditions[i].Status = metav1.ConditionTrue
+				configPlan.Status.Conditions[i].Reason = ReasonCompleted
+				configPlan.Status.Conditions[i].Message = MessageCompletedSuccess
 				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
 				needsUpdate = true
 			}
@@ -641,7 +699,7 @@ func (r *VirtPlatformConfigReconciler) handleDriftedPhase(ctx context.Context, c
 	for i := range configPlan.Status.Items {
 		item := &configPlan.Status.Items[i]
 		if item.State == advisorv1alpha1.ItemStateCompleted &&
-		   item.Message == "Configuration has drifted from desired state" {
+			item.Message == "Configuration has drifted from desired state" {
 			hasItemDrift = true
 			break
 		}
@@ -723,8 +781,9 @@ func (r *VirtPlatformConfigReconciler) refreshItemDiff(ctx context.Context, item
 	}
 
 	// Convert desired state to unstructured
-	desired := &unstructured.Unstructured{
-		Object: item.DesiredState,
+	desired := &unstructured.Unstructured{}
+	if err := json.Unmarshal(item.DesiredState.Raw, &desired.Object); err != nil {
+		return fmt.Errorf("failed to unmarshal desired state: %w", err)
 	}
 
 	// Regenerate the diff using SSA dry-run
@@ -778,22 +837,39 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 	// Manage phase-related conditions based on phase transitions
 	switch newPhase {
 	case advisorv1alpha1.PlanPhaseDrafting:
-		r.setCondition(configPlan, "Drafting", metav1.ConditionTrue, "Drafting", "Generating plan from profile")
-		r.setCondition(configPlan, "InProgress", metav1.ConditionFalse, "NotInProgress", "Plan is not being applied")
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionTrue, ReasonDrafting, MessageDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
 
 	case advisorv1alpha1.PlanPhaseInProgress:
-		r.setCondition(configPlan, "Drafting", metav1.ConditionFalse, "NotDrafting", "Plan generation completed")
-		r.setCondition(configPlan, "InProgress", metav1.ConditionTrue, "InProgress", "Applying plan configuration")
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionTrue, ReasonInProgress, MessageInProgress)
 
 	case advisorv1alpha1.PlanPhaseCompleted:
-		r.setCondition(configPlan, "Drafting", metav1.ConditionFalse, "NotDrafting", "Plan generation completed")
-		r.setCondition(configPlan, "InProgress", metav1.ConditionFalse, "NotInProgress", "Plan application completed")
-		r.setCondition(configPlan, "Drifted", metav1.ConditionFalse, "NoDrift", "Configuration is in sync with desired state")
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompleted)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionTrue, ReasonCompleted, MessageCompletedSuccess)
 
 	case advisorv1alpha1.PlanPhaseDrifted:
-		r.setCondition(configPlan, "Drafting", metav1.ConditionFalse, "NotDrafting", "Plan generation completed")
-		r.setCondition(configPlan, "InProgress", metav1.ConditionFalse, "NotInProgress", "Waiting for manual intervention or aggressive remediation")
-		r.setCondition(configPlan, "Drifted", metav1.ConditionTrue, "DriftDetected", "Configuration has drifted from desired state")
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressDrifted)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionTrue, ReasonDriftDetected, MessageDriftDetected)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonConfigurationDrifted, MessageCompletedDrifted)
+
+	case advisorv1alpha1.PlanPhaseCompletedWithErrors:
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompletedErr)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
+
+	case advisorv1alpha1.PlanPhaseFailed:
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingFailed)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressFailed)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonFailed, MessageCompletedFailed)
+
+	case advisorv1alpha1.PlanPhasePrerequisiteFailed:
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingPrereqFail)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressPrereqFail)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonPrerequisitesFailed, MessageCompletedPrereqFailed)
 	}
 
 	return r.Status().Update(ctx, configPlan)
@@ -892,17 +968,201 @@ func stringPtrEqual(a, b *string) bool {
 	return *a == *b
 }
 
+// managedResourcePredicate returns a predicate that filters events to only managed resources.
+// This optimizes memory by only caching resources that are referenced in VirtPlatformConfig items.
+func (r *VirtPlatformConfigReconciler) managedResourcePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return r.isManagedResource(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return r.isManagedResource(e.ObjectNew)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return r.isManagedResource(e.Object)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return r.isManagedResource(e.Object)
+		},
+	}
+}
+
+// isManagedResource checks if a resource is referenced in any VirtPlatformConfig items.
+// This is used to filter watched resources and minimize cache memory usage.
+func (r *VirtPlatformConfigReconciler) isManagedResource(obj client.Object) bool {
+	ctx := context.Background()
+
+	// List all VirtPlatformConfigs
+	configList := &advisorv1alpha1.VirtPlatformConfigList{}
+	if err := r.List(ctx, configList); err != nil {
+		return false
+	}
+
+	// Get the object's GVK, name, and namespace
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return false
+	}
+
+	objGVK := u.GroupVersionKind()
+	objName := u.GetName()
+	objNamespace := u.GetNamespace()
+
+	// Check if this object is referenced in any VirtPlatformConfig items
+	for _, config := range configList.Items {
+		for _, item := range config.Status.Items {
+			// Parse the targetRef apiVersion to get group and version
+			ref := item.TargetRef
+			if ref.Kind == objGVK.Kind && ref.Name == objName {
+				// Check if apiVersion matches (handle group.io/v1 format)
+				if ref.APIVersion == objGVK.GroupVersion().String() {
+					// Check namespace (empty means cluster-scoped)
+					if ref.Namespace == objNamespace {
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	return false
+}
+
+// enqueueManagedResourceOwners returns an event handler that maps managed resource events
+// to reconciliation requests for their owning VirtPlatformConfigs.
+func (r *VirtPlatformConfigReconciler) enqueueManagedResourceOwners() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		logger := log.FromContext(ctx)
+
+		// Get the object's GVK, name, and namespace
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			return nil
+		}
+
+		objGVK := u.GroupVersionKind()
+		objName := u.GetName()
+		objNamespace := u.GetNamespace()
+
+		logger.V(1).Info("Managed resource changed, finding owner VirtPlatformConfigs",
+			"gvk", objGVK.String(),
+			"name", objName,
+			"namespace", objNamespace)
+
+		// List all VirtPlatformConfigs to find which ones manage this resource
+		configList := &advisorv1alpha1.VirtPlatformConfigList{}
+		if err := r.List(ctx, configList); err != nil {
+			logger.Error(err, "Failed to list VirtPlatformConfigs for managed resource event")
+			return nil
+		}
+
+		var requests []reconcile.Request
+		for _, config := range configList.Items {
+			for _, item := range config.Status.Items {
+				ref := item.TargetRef
+				if ref.Kind == objGVK.Kind && ref.Name == objName {
+					// Check if apiVersion matches
+					if ref.APIVersion == objGVK.GroupVersion().String() {
+						// Check namespace
+						if ref.Namespace == objNamespace {
+							logger.Info("Enqueuing VirtPlatformConfig for managed resource change",
+								"virtplatformconfig", config.Name,
+								"managedResource", fmt.Sprintf("%s/%s", objGVK.Kind, objName))
+							requests = append(requests, reconcile.Request{
+								NamespacedName: types.NamespacedName{
+									Name: config.Name,
+									// VirtPlatformConfig is cluster-scoped
+								},
+							})
+						}
+					}
+				}
+			}
+		}
+
+		return requests
+	})
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&advisorv1alpha1.VirtPlatformConfig{}).
-		// Watch managed resources for drift detection
-		Watches(
-			&unstructured.Unstructured{},
+	logger := mgr.GetLogger().WithName("setup")
+	ctx := context.Background()
+
+	// Start building the controller
+	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
+		For(&advisorv1alpha1.VirtPlatformConfig{})
+
+	// Dynamically register watches for all resource types managed by registered profiles
+	// This implements a plugin mechanism where each profile declares what it needs to monitor
+	managedGVKs := profiles.DefaultRegistry.GetAllManagedResourceTypes()
+
+	logger.Info("Setting up dynamic watches for managed resources",
+		"profileCount", len(profiles.DefaultRegistry.List()),
+		"uniqueResourceTypes", len(managedGVKs))
+
+	// IMPORTANT: Only register watches for resource types whose CRDs actually exist
+	// This prevents controller-runtime startup failures when CRDs are missing
+	// We need a non-cached client because the cache hasn't started yet during setup
+	directClient, err := client.New(mgr.GetConfig(), client.Options{
+		Scheme: mgr.GetScheme(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create direct client for CRD checking: %w", err)
+	}
+
+	crdChecker := discovery.NewCRDChecker(directClient)
+	registeredWatchCount := 0
+	skippedWatchCount := 0
+
+	for _, gvk := range managedGVKs {
+		// Check if the CRD exists before trying to watch it
+		crdName := discovery.GVKToCRDName(gvk)
+		exists, err := crdChecker.CRDExists(ctx, crdName)
+		if err != nil {
+			logger.Error(err, "Failed to check CRD existence, skipping watch",
+				"crd", crdName,
+				"group", gvk.Group,
+				"version", gvk.Version,
+				"kind", gvk.Kind)
+			skippedWatchCount++
+			continue
+		}
+
+		if !exists {
+			logger.Info("Skipping watch for resource type - CRD not installed",
+				"crd", crdName,
+				"group", gvk.Group,
+				"version", gvk.Version,
+				"kind", gvk.Kind,
+				"note", "Watch will not be registered. Profiles using this resource will fail prerequisite checks.")
+			skippedWatchCount++
+			continue
+		}
+
+		// CRD exists - safe to register watch
+		resource := &unstructured.Unstructured{}
+		resource.SetGroupVersionKind(gvk)
+
+		logger.Info("Registering watch for resource type",
+			"group", gvk.Group,
+			"version", gvk.Version,
+			"kind", gvk.Kind)
+
+		// Add watch with predicate filtering and event handler
+		controllerBuilder = controllerBuilder.Watches(
+			resource,
 			r.enqueueManagedResourceOwners(),
-			// Optimize: Only watch specific resource types we manage
 			builder.WithPredicates(r.managedResourcePredicate()),
-		).
+		)
+		registeredWatchCount++
+	}
+
+	logger.Info("Dynamic watch setup complete",
+		"registeredWatches", registeredWatchCount,
+		"skippedWatches", skippedWatchCount)
+
+	return controllerBuilder.
 		Named("virtplatformconfig").
 		Complete(r)
 }

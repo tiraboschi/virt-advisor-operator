@@ -48,8 +48,13 @@ func (c *CRDChecker) crdExists(ctx context.Context, gvk schema.GroupVersionKind)
 	// Construct the CRD name: <plural>.<group>
 	// We need to derive plural from the kind (heuristic: lowercase + s)
 	// For production, we'd use RESTMapper, but for now use a simple approach
-	crdName := c.ConstructCRDName(gvk)
+	crdName := GVKToCRDName(gvk)
 
+	return c.CRDExists(ctx, crdName)
+}
+
+// CRDExists checks if a CRD with the given name exists
+func (c *CRDChecker) CRDExists(ctx context.Context, crdName string) (bool, error) {
 	crd := &apiextensionsv1.CustomResourceDefinition{}
 	err := c.client.Get(ctx, client.ObjectKey{Name: crdName}, crd)
 	if err != nil {
@@ -59,19 +64,13 @@ func (c *CRDChecker) crdExists(ctx context.Context, gvk schema.GroupVersionKind)
 		return false, err // Some other error
 	}
 
-	// Verify the CRD has the requested version
-	for _, version := range crd.Spec.Versions {
-		if version.Name == gvk.Version {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return true, nil
 }
 
-// ConstructCRDName builds a CRD name from GVK
+// GVKToCRDName builds a CRD name from GVK
 // Format: <plural>.<group>
-func (c *CRDChecker) ConstructCRDName(gvk schema.GroupVersionKind) string {
+// This is exported for use by the controller when registering dynamic watches
+func GVKToCRDName(gvk schema.GroupVersionKind) string {
 	// Simple pluralization heuristic
 	// This matches common patterns but could be improved with a full inflector
 	kind := gvk.Kind

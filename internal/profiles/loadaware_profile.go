@@ -102,6 +102,14 @@ func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisit
 	}
 }
 
+// GetManagedResourceTypes returns the resource types this profile manages for drift detection
+func (p *LoadAwareRebalancingProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
+	return []schema.GroupVersionKind{
+		KubeDeschedulerGVK,
+		MachineConfigGVK,
+	}
+}
+
 // Validate checks if the provided config overrides are valid
 func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string) error {
 	supportedKeys := map[string]bool{

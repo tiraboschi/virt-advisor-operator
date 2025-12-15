@@ -208,7 +208,7 @@ func main() {
 		}
 
 		for _, prereq := range missing {
-			crdName := checker.ConstructCRDName(prereq.GVK)
+			crdName := discovery.GVKToCRDName(prereq.GVK)
 			crdSentinel.MarkCRDMissing(crdName)
 			setupLog.Info("CRD not found at startup, will watch for installation",
 				"crd", crdName,

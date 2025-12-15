@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:validation:Enum=DryRun;Apply
@@ -192,7 +193,7 @@ type VirtPlatformConfigItem struct {
 	// +optional
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +kubebuilder:validation:Schemaless
-	DesiredState map[string]interface{} `json:"desiredState,omitempty"`
+	DesiredState *runtime.RawExtension `json:"desiredState,omitempty"`
 
 	// State tracks the execution progress of this specific item.
 	// +kubebuilder:default="Pending"

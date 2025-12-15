@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
@@ -21,6 +22,10 @@ func (m *mockProfile) GetName() string {
 
 func (m *mockProfile) GetPrerequisites() []discovery.Prerequisite {
 	return []discovery.Prerequisite{}
+}
+
+func (m *mockProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
+	return []schema.GroupVersionKind{}
 }
 
 func (m *mockProfile) Validate(configOverrides map[string]string) error {

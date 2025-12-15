@@ -2,10 +2,12 @@ package profiles
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
@@ -125,6 +127,12 @@ func (b *PlanItemBuilder) Build() (advisorv1alpha1.VirtPlatformConfigItem, error
 		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to generate SSA diff: %w", err)
 	}
 
+	// Convert desired state to RawExtension
+	desiredBytes, err := json.Marshal(b.desired.Object)
+	if err != nil {
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to marshal desired state: %w", err)
+	}
+
 	return advisorv1alpha1.VirtPlatformConfigItem{
 		Name: b.name,
 		TargetRef: advisorv1alpha1.ObjectReference{
@@ -133,9 +141,11 @@ func (b *PlanItemBuilder) Build() (advisorv1alpha1.VirtPlatformConfigItem, error
 			Name:       b.desired.GetName(),
 			Namespace:  b.desired.GetNamespace(),
 		},
-		ImpactSeverity:     b.impactSeverity,
-		Diff:               diff,
-		DesiredState:       b.desired.Object, // Store the complete desired configuration
+		ImpactSeverity: b.impactSeverity,
+		Diff:           diff,
+		DesiredState: &runtime.RawExtension{
+			Raw: desiredBytes,
+		},
 		State:              advisorv1alpha1.ItemStatePending,
 		Message:            b.message,
 		ManagedFields:      b.managedFields,

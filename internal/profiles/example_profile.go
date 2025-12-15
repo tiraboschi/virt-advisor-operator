@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
@@ -32,6 +33,12 @@ func (p *ExampleProfile) GetName() string {
 // Example profile has no prerequisites as it's just a demonstration.
 func (p *ExampleProfile) GetPrerequisites() []discovery.Prerequisite {
 	return []discovery.Prerequisite{}
+}
+
+// GetManagedResourceTypes returns the resource types this profile manages for drift detection.
+// Example profile doesn't manage any real resources, so returns empty.
+func (p *ExampleProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
+	return []schema.GroupVersionKind{}
 }
 
 // Validate checks if the provided config overrides are valid.

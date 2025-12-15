@@ -207,6 +207,101 @@ func init() {
 }
 ```
 
+## Profile Interface Methods
+
+All profiles must implement the `Profile` interface, which includes the following methods:
+
+### GetName() string
+Returns the unique identifier for the profile. This name must match the VirtPlatformConfig resource name (singleton pattern).
+
+### GetPrerequisites() []discovery.Prerequisite
+Returns the list of CRDs required by this profile. The controller checks these before generating the plan and moves to `PrerequisiteFailed` if any are missing.
+
+```go
+func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisite {
+    return []discovery.Prerequisite{
+        {
+            GVK:         KubeDeschedulerGVK,
+            Description: "Please install the Descheduler Operator via OLM",
+        },
+        {
+            GVK:         MachineConfigGVK,
+            Description: "MachineConfig CRD is required for PSI metrics configuration",
+        },
+    }
+}
+```
+
+### GetManagedResourceTypes() []schema.GroupVersionKind
+**IMPORTANT**: This method enables the **plugin mechanism for drift detection**.
+
+Returns the list of resource types (GVKs) that this profile manages. The controller **automatically watches** these resources for changes, enabling automatic drift detection without manual configuration.
+
+**How it works:**
+1. During startup, the controller queries all registered profiles
+2. Collects all unique GVKs from `GetManagedResourceTypes()`
+3. Dynamically creates watches for each resource type
+4. When a managed resource changes, the controller automatically triggers reconciliation
+5. Drift is detected and the VirtPlatformConfig transitions to `Drifted` phase
+
+**Example:**
+```go
+func (p *LoadAwareRebalancingProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
+    return []schema.GroupVersionKind{
+        KubeDeschedulerGVK,
+        MachineConfigGVK,
+    }
+}
+```
+
+**Benefits:**
+- ✅ **Automatic drift detection**: No manual watch configuration needed
+- ✅ **Memory optimized**: Predicates filter to only cache managed resources
+- ✅ **Plugin architecture**: Adding new profiles automatically adds their watches
+- ✅ **Extensible**: Each profile declares what it needs to monitor
+
+**Startup logs example (all CRDs present):**
+```
+INFO  setup  Setting up dynamic watches for managed resources
+    {"profileCount": 2, "uniqueResourceTypes": 2}
+INFO  setup  Registering watch for resource type
+    {"group": "operator.openshift.io", "version": "v1", "kind": "KubeDescheduler"}
+INFO  setup  Registering watch for resource type
+    {"group": "machineconfiguration.openshift.io", "version": "v1", "kind": "MachineConfig"}
+INFO  setup  Dynamic watch setup complete
+    {"registeredWatches": 2, "skippedWatches": 0}
+```
+
+**Startup logs example (CRD missing):**
+```
+INFO  setup  Setting up dynamic watches for managed resources
+    {"profileCount": 2, "uniqueResourceTypes": 2}
+INFO  setup  Skipping watch for resource type - CRD not installed
+    {"crd": "kubedeschedulers.operator.openshift.io", "group": "operator.openshift.io",
+     "version": "v1", "kind": "KubeDescheduler",
+     "note": "Watch will not be registered. Profiles using this resource will fail prerequisite checks."}
+INFO  setup  Registering watch for resource type
+    {"group": "machineconfiguration.openshift.io", "version": "v1", "kind": "MachineConfig"}
+INFO  setup  Dynamic watch setup complete
+    {"registeredWatches": 1, "skippedWatches": 1}
+```
+
+**Critical Implementation Detail:**
+The controller uses a **non-cached direct client** during `SetupWithManager` to check CRD existence. This is necessary because the manager's cache hasn't started yet during setup. Without this:
+- Trying to use the cached client would fail with "cache is not started"
+- Trying to register watches for non-existent CRDs would cause controller-runtime startup failures
+
+This design ensures:
+- ✅ **Graceful degradation**: Missing CRDs don't prevent operator startup
+- ✅ **Cross-platform support**: Works on vanilla Kubernetes (without OpenShift CRDs)
+- ✅ **Clear feedback**: Logs show which watches were skipped and why
+
+### Validate(configOverrides map[string]string) error
+Validates that the provided configuration overrides are valid for this profile. Returns an error if any override is unsupported or invalid.
+
+### GeneratePlanItems(ctx, client, configOverrides) ([]VirtPlatformConfigItem, error)
+Generates the ordered list of configuration items to apply. **MUST use PlanItemBuilder** to create items (see "CRITICAL REQUIREMENT" section above).
+
 ## Testing Your Profile
 
 ### Unit Tests

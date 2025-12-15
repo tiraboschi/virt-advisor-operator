@@ -34,6 +34,12 @@ spec:
                 type: integer
                 minimum: 1
                 default: 3600
+              mode:
+                type: string
+                enum:
+                - Automatic
+                - Predictive
+                default: Automatic
               profiles:
                 type: array
                 items:
@@ -41,10 +47,14 @@ spec:
                   enum:
                   - AffinityAndTaints
                   - TopologyAndDuplicates
+                  - SoftTopologyAndDuplicates
                   - LifecycleAndUtilization
                   - EvictPodsWithLocalStorage
                   - EvictPodsWithPVC
                   - LoadAware
+                  - LongLifecycle
+                  - KubeVirtRelieveAndMigrate
+                  - DevKubeVirtRelieveAndMigrate
               profileCustomizations:
                 type: object
                 properties:
@@ -61,6 +71,17 @@ spec:
                           type: string
                   devEnableEvictionsInBackground:
                     type: boolean
+                  devEnableSoftTainter:
+                    type: boolean
+                  devDeviationThresholds:
+                    type: string
+                    enum:
+                    - Low
+                    - Medium
+                    - High
+                    - AsymmetricLow
+                    - AsymmetricMedium
+                    - AsymmetricHigh
                   podLifetime:
                     type: integer
                     minimum: 0

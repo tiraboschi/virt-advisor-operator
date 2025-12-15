@@ -2,6 +2,7 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -20,8 +21,9 @@ func ExecuteItem(ctx context.Context, c client.Client, item *advisorv1alpha1.Vir
 	}
 
 	// Convert the stored desired state to an unstructured object
-	obj := &unstructured.Unstructured{
-		Object: item.DesiredState,
+	obj := &unstructured.Unstructured{}
+	if err := json.Unmarshal(item.DesiredState.Raw, &obj.Object); err != nil {
+		return fmt.Errorf("failed to unmarshal desired state: %w", err)
 	}
 
 	// Validate the object has required fields

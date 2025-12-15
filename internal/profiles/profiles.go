@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
@@ -40,6 +41,11 @@ type Profile interface {
 	// GetPrerequisites returns the list of CRDs required by this profile.
 	// The controller will check these before generating the plan.
 	GetPrerequisites() []discovery.Prerequisite
+
+	// GetManagedResourceTypes returns the list of resource types (GVKs) that this profile manages.
+	// The controller will automatically watch these resources for drift detection.
+	// This enables a plugin mechanism where each profile declares what it needs to monitor.
+	GetManagedResourceTypes() []schema.GroupVersionKind
 
 	// Validate checks if the provided config overrides are valid for this profile.
 	// Returns an error if any override is invalid or unsupported.
@@ -93,6 +99,28 @@ func (r *Registry) List() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// GetAllManagedResourceTypes returns the unique set of resource types (GVKs)
+// that are managed by all registered profiles. This is used by the controller
+// to dynamically register watches for drift detection.
+func (r *Registry) GetAllManagedResourceTypes() []schema.GroupVersionKind {
+	gvkSet := make(map[schema.GroupVersionKind]bool)
+
+	// Collect all GVKs from all profiles
+	for _, profile := range r.profiles {
+		for _, gvk := range profile.GetManagedResourceTypes() {
+			gvkSet[gvk] = true
+		}
+	}
+
+	// Convert set to slice
+	gvks := make([]schema.GroupVersionKind, 0, len(gvkSet))
+	for gvk := range gvkSet {
+		gvks = append(gvks, gvk)
+	}
+
+	return gvks
 }
 
 // DefaultRegistry is the global profile registry.
