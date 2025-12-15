@@ -766,7 +766,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2)) // KubeDescheduler + MachineConfig
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			var mcItem *hcov1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -826,7 +826,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2))
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			var mcItem *hcov1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -883,7 +883,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			var mcItem *hcov1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -939,7 +939,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			var mcItem *hcov1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -965,7 +965,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2))
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.ConfigurationPlanItem
+			var mcItem *hcov1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]

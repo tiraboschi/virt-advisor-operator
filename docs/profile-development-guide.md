@@ -6,7 +6,7 @@ This guide explains how to create new configuration profiles for the virt-adviso
 
 ## CRITICAL REQUIREMENT: Always Use PlanItemBuilder
 
-**You MUST use `PlanItemBuilder` when creating `ConfigurationPlanItem` objects.** This ensures:
+**You MUST use `PlanItemBuilder` when creating `VirtPlatformConfigItem` objects.** This ensures:
 
 1. ✅ **API Server Validation**: Diffs reflect CEL validation rules
 2. ✅ **Defaulting**: Shows actual defaults the API server will apply
@@ -17,7 +17,7 @@ This guide explains how to create new configuration profiles for the virt-adviso
 
 ```go
 // DO NOT DO THIS - Bypasses API server validation!
-func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
     diff := fmt.Sprintf(`--- my-resource
 +++ my-resource
 @@ -1,1 +1,1 @@
@@ -26,7 +26,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
 +  newValue: 2
 `)
 
-    return []hcov1alpha1.ConfigurationPlanItem{{
+    return []hcov1alpha1.VirtPlatformConfigItem{{
         Name:       "my-item",
         Diff:       diff,  // ❌ Manual string - NO validation!
         TargetRef:  /* ... */,
@@ -44,7 +44,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
 ### ✅ CORRECT - Using PlanItemBuilder
 
 ```go
-func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
     // 1. Build the desired object
     desired := plan.CreateUnstructured(MyGVK, "my-resource", "")
 
@@ -67,7 +67,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
         return nil, err
     }
 
-    return []hcov1alpha1.ConfigurationPlanItem{item}, nil
+    return []hcov1alpha1.VirtPlatformConfigItem{item}, nil
 }
 ```
 
@@ -103,7 +103,7 @@ When you call `.Build()`, the builder:
 2. **Auto-determines** impact severity if not manually set
 3. **Performs SSA dry-run** with `DryRun=true`, `Force=true`
 4. **Generates unified diff** comparing live vs. dry-run result
-5. **Returns** complete `ConfigurationPlanItem`
+5. **Returns** complete `VirtPlatformConfigItem`
 
 ## Complete Example: LoadAwareRebalancing Profile
 
@@ -147,7 +147,7 @@ func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string
     return nil
 }
 
-func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
     // Select the best available descheduler profile based on CRD schema
     profile := p.selectDeschedulerProfile(ctx, c)  // Returns KubeVirtRelieveAndMigrate, DevKubeVirtRelieveAndMigrate, or LongLifecycle
 
@@ -197,7 +197,7 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
         return nil, err
     }
 
-    return []hcov1alpha1.ConfigurationPlanItem{item}, nil
+    return []hcov1alpha1.VirtPlatformConfigItem{item}, nil
 }
 
 func init() {
@@ -261,11 +261,11 @@ func TestMyProfile(t *testing.T) {
 
 ## Common Pitfalls to Avoid
 
-### ❌ Don't manually construct ConfigurationPlanItem
+### ❌ Don't manually construct VirtPlatformConfigItem
 
 ```go
 // WRONG - Bypasses SSA validation
-return []hcov1alpha1.ConfigurationPlanItem{{
+return []hcov1alpha1.VirtPlatformConfigItem{{
     Name: "my-item",
     Diff: "manual diff string",
     // ...
@@ -277,7 +277,7 @@ return []hcov1alpha1.ConfigurationPlanItem{{
 ```go
 // WRONG - Use builder instead
 diff, err := plan.GenerateSSADiff(ctx, c, desired, "field-manager")
-item := hcov1alpha1.ConfigurationPlanItem{
+item := hcov1alpha1.VirtPlatformConfigItem{
     Diff: diff,
     // ...
 }
@@ -294,7 +294,7 @@ item, err := NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
 
 ## Summary
 
-1. **ALWAYS use `PlanItemBuilder`** to create ConfigurationPlanItems
+1. **ALWAYS use `PlanItemBuilder`** to create VirtPlatformConfigItems
 2. **NEVER manually construct diffs** with string concatenation
 3. **Let the builder handle SSA dry-run** for accurate, validated diffs
 4. **Specify managed fields** for proper drift detection

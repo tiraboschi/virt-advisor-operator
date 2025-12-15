@@ -30,7 +30,7 @@ import (
 	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
 
-var _ = Describe("ConfigurationPlan Controller", func() {
+var _ = Describe("VirtPlatformConfig Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 
@@ -38,20 +38,20 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name: resourceName,
-			// No namespace - ConfigurationPlan is cluster-scoped
+			// No namespace - VirtPlatformConfig is cluster-scoped
 		}
-		configurationplan := &hcov1alpha1.ConfigurationPlan{}
+		configurationplan := &hcov1alpha1.VirtPlatformConfig{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind ConfigurationPlan")
+			By("creating the custom resource for the Kind VirtPlatformConfig")
 			err := k8sClient.Get(ctx, typeNamespacedName, configurationplan)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &hcov1alpha1.ConfigurationPlan{
+				resource := &hcov1alpha1.VirtPlatformConfig{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: resourceName,
-						// No namespace - ConfigurationPlan is cluster-scoped
+						// No namespace - VirtPlatformConfig is cluster-scoped
 					},
-					Spec: hcov1alpha1.ConfigurationPlanSpec{
+					Spec: hcov1alpha1.VirtPlatformConfigSpec{
 						Profile: resourceName, // Must match metadata.name per CEL validation
 					},
 				}
@@ -60,8 +60,8 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 		})
 
 		AfterEach(func() {
-			By("Cleanup the specific resource instance ConfigurationPlan")
-			resource := &hcov1alpha1.ConfigurationPlan{}
+			By("Cleanup the specific resource instance VirtPlatformConfig")
+			resource := &hcov1alpha1.VirtPlatformConfig{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -69,7 +69,7 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &ConfigurationPlanReconciler{
+			controllerReconciler := &VirtPlatformConfigReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
 			}
@@ -86,37 +86,37 @@ var _ = Describe("ConfigurationPlan Controller", func() {
 
 		AfterEach(func() {
 			// Clean up any resources that might have been created
-			resource := &hcov1alpha1.ConfigurationPlan{}
+			resource := &hcov1alpha1.VirtPlatformConfig{}
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: "mismatched-name"}, resource)
 			if err == nil {
 				_ = k8sClient.Delete(ctx, resource)
 			}
 		})
 
-		It("should reject ConfigurationPlan when name does not match profile", func() {
-			By("attempting to create a ConfigurationPlan with mismatched name and profile")
-			resource := &hcov1alpha1.ConfigurationPlan{
+		It("should reject VirtPlatformConfig when name does not match profile", func() {
+			By("attempting to create a VirtPlatformConfig with mismatched name and profile")
+			resource := &hcov1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "mismatched-name",
 				},
-				Spec: hcov1alpha1.ConfigurationPlanSpec{
+				Spec: hcov1alpha1.VirtPlatformConfigSpec{
 					Profile: "different-profile",
 				},
 			}
 
 			err := k8sClient.Create(ctx, resource)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("To ensure a singleton pattern, the ConfigurationPlan name must exactly match the spec.profile"))
+			Expect(err.Error()).To(ContainSubstring("To ensure a singleton pattern, the VirtPlatformConfig name must exactly match the spec.profile"))
 		})
 
-		It("should accept ConfigurationPlan when name matches profile", func() {
-			By("creating a ConfigurationPlan with matching name and profile")
+		It("should accept VirtPlatformConfig when name matches profile", func() {
+			By("creating a VirtPlatformConfig with matching name and profile")
 			const matchingName = "matching-profile"
-			resource := &hcov1alpha1.ConfigurationPlan{
+			resource := &hcov1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: matchingName,
 				},
-				Spec: hcov1alpha1.ConfigurationPlanSpec{
+				Spec: hcov1alpha1.VirtPlatformConfigSpec{
 					Profile: matchingName,
 				},
 			}

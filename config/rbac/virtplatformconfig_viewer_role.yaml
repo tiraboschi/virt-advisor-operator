@@ -1,7 +1,7 @@
 # This rule is not used by the project virt-advisor-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants read-only access to hco.kubevirt.io resources.
+# Grants read-only access to advisor.kubevirt.io resources.
 # This role is intended for users who need visibility into these resources
 # without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
 
@@ -14,7 +14,7 @@ metadata:
   name: configurationplan-viewer-role
 rules:
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
   - configurationplans
   verbs:
@@ -22,7 +22,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
   - configurationplans/status
   verbs:

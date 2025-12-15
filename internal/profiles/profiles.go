@@ -13,13 +13,13 @@ import (
 // Each profile represents a named capability or feature set that can be applied to the cluster.
 //
 // IMPORTANT: When implementing GeneratePlanItems(), you MUST use PlanItemBuilder
-// to construct ConfigurationPlanItems. This ensures diffs are generated using
+// to construct VirtPlatformConfigItems. This ensures diffs are generated using
 // Server-Side Apply (SSA) dry-run, which leverages API server validation, defaulting,
 // CEL rules, and webhooks as required by the VEP.
 //
 // Example:
 //
-//	func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
+//	func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
 //	    desired := plan.CreateUnstructured(MyGVK, "my-resource", "")
 //	    // ... configure desired object ...
 //
@@ -30,7 +30,7 @@ import (
 //	    if err != nil {
 //	        return nil, err
 //	    }
-//	    return []hcov1alpha1.ConfigurationPlanItem{item}, nil
+//	    return []hcov1alpha1.VirtPlatformConfigItem{item}, nil
 //	}
 type Profile interface {
 	// GetName returns the unique name of this profile.
@@ -45,7 +45,7 @@ type Profile interface {
 	//
 	// CRITICAL: You MUST use PlanItemBuilder to construct items, not manually.
 	// See the Profile interface documentation for usage example.
-	GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error)
+	GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error)
 }
 
 // Registry manages the collection of available profiles.

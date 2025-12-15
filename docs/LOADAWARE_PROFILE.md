@@ -67,11 +67,11 @@ Located in `internal/plan/executor.go` and `apply.go`:
 ### 1. Preview (DryRun)
 
 ```bash
-# Apply the ConfigurationPlan with action=DryRun
+# Apply the VirtPlatformConfig with action=DryRun
 kubectl apply -f config/samples/loadaware_sample.yaml
 
 # View the generated plan with diffs
-kubectl get configurationplan load-aware-rebalancing -o yaml
+kubectl get virtplatformconfig load-aware-rebalancing -o yaml
 ```
 
 **What happens:**
@@ -124,7 +124,7 @@ Review the diffs in the status to understand what will change.
 
 ```bash
 # Change action from DryRun to Apply
-kubectl patch configurationplan load-aware-rebalancing \
+kubectl patch virtplatformconfig load-aware-rebalancing \
   --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"Apply"}]'
 ```
 
@@ -181,7 +181,7 @@ make run
 
 # Test the profile
 kubectl apply -f config/samples/loadaware_sample.yaml
-kubectl get configurationplan load-aware-rebalancing -w
+kubectl get virtplatformconfig load-aware-rebalancing -w
 ```
 
 ### Manual Testing
@@ -194,10 +194,10 @@ kubectl apply -f config/samples/mock_baseline_resources.yaml
 kubectl apply -f config/samples/loadaware_sample.yaml
 
 # Watch phases
-kubectl get configurationplan -w
+kubectl get virtplatformconfig -w
 
 # Approve and apply
-kubectl patch configurationplan load-aware-rebalancing \
+kubectl patch virtplatformconfig load-aware-rebalancing \
   --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"Apply"}]'
 
 # Verify changes
@@ -216,7 +216,7 @@ kubectl get machineconfig 99-worker-psi-karg -o jsonpath='{.spec.kernelArguments
 - `internal/thirdparty/`: Mock CRD type definitions
 - `config/crd/mocks/`: Mock CRD definitions
 - `config/samples/mock_baseline_resources.yaml`: Baseline test data
-- `config/samples/loadaware_sample.yaml`: Example ConfigurationPlan
+- `config/samples/loadaware_sample.yaml`: Example VirtPlatformConfig
 
 ### State Machine
 
@@ -240,7 +240,7 @@ Pending → Drafting → ReviewRequired → InProgress → Completed
 1. **Real Diff Generation**: Use strategic merge patch or JSON patch for accurate diffs
 2. **Drift Detection**: Implement periodic drift checking in `Completed` phase
 3. **Rollback**: Add rollback capability for failed applies
-4. **Webhooks**: Add validation webhooks for ConfigurationPlan
+4. **Webhooks**: Add validation webhooks for VirtPlatformConfig
 5. **More Profiles**: Implement additional profiles from the VEP
 
 ## References

@@ -1,9 +1,9 @@
 # This rule is not used by the project virt-advisor-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants permissions to create, update, and delete resources within the hco.kubevirt.io.
-# This role is intended for users who need to manage these resources
-# but should not control RBAC or manage permissions for others.
+# Grants full permissions ('*') over advisor.kubevirt.io.
+# This role is intended for users authorized to modify roles and bindings within the cluster,
+# enabling them to delegate specific permissions to other users or groups as needed.
 
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -11,22 +11,16 @@ metadata:
   labels:
     app.kubernetes.io/name: virt-advisor-operator
     app.kubernetes.io/managed-by: kustomize
-  name: configurationplan-editor-role
+  name: configurationplan-admin-role
 rules:
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
   - configurationplans
   verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
+  - '*'
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
   - configurationplans/status
   verbs:

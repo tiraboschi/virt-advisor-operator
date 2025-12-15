@@ -44,9 +44,9 @@ const (
 	FailurePolicyContinue FailurePolicy = "Continue"
 )
 
-// ConfigurationPlanSpec defines the desired state of ConfigurationPlan
+// VirtPlatformConfigSpec defines the desired state of VirtPlatformConfig
 // +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'load-aware-rebalancing' ? has(self.options.loadAware) : true)",message="When profile is 'load-aware-rebalancing', only options.loadAware may be set"
-type ConfigurationPlanSpec struct {
+type VirtPlatformConfigSpec struct {
 	// Profile is the named capability to activate.
 	// This field is immutable once set.
 	// +kubebuilder:validation:Required
@@ -162,8 +162,8 @@ const (
 	ItemStateFailed     ItemState = "Failed"
 )
 
-// ConfigurationPlanItem represents a single unit of work (e.g., one Descheduler patch).
-type ConfigurationPlanItem struct {
+// VirtPlatformConfigItem represents a single unit of work (e.g., one Descheduler patch).
+type VirtPlatformConfigItem struct {
 	// Name is a human-readable identifier for this step (e.g., "enable-psi-metrics").
 	Name string `json:"name"`
 
@@ -210,8 +210,8 @@ type ObjectReference struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// ConfigurationPlanStatus defines the observed state of ConfigurationPlan
-type ConfigurationPlanStatus struct {
+// VirtPlatformConfigStatus defines the observed state of VirtPlatformConfig
+type VirtPlatformConfigStatus struct {
 	// Phase is the high-level summary of the plan's lifecycle.
 	Phase PlanPhase `json:"phase,omitempty"`
 
@@ -233,7 +233,7 @@ type ConfigurationPlanStatus struct {
 	// Items is the ordered list of configuration steps to be executed.
 	// +listType=map
 	// +listMapKey=name
-	Items []ConfigurationPlanItem `json:"items,omitempty"`
+	Items []VirtPlatformConfigItem `json:"items,omitempty"`
 
 	// Conditions represents the latest available observations of the object's state.
 	// +optional
@@ -249,26 +249,26 @@ type ConfigurationPlanStatus struct {
 // +kubebuilder:printcolumn:name="Action",type="string",JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-// +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.profile",message="To ensure a singleton pattern, the ConfigurationPlan name must exactly match the spec.profile."
+// +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.profile",message="To ensure a singleton pattern, the VirtPlatformConfig name must exactly match the spec.profile."
 
-// ConfigurationPlan is the Schema for the configurationplans API
-type ConfigurationPlan struct {
+// VirtPlatformConfig is the Schema for the virtplatformconfigs API
+type VirtPlatformConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ConfigurationPlanSpec   `json:"spec,omitempty"`
-	Status ConfigurationPlanStatus `json:"status,omitempty"`
+	Spec   VirtPlatformConfigSpec   `json:"spec,omitempty"`
+	Status VirtPlatformConfigStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// ConfigurationPlanList contains a list of ConfigurationPlan
-type ConfigurationPlanList struct {
+// VirtPlatformConfigList contains a list of VirtPlatformConfig
+type VirtPlatformConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []ConfigurationPlan `json:"items"`
+	Items           []VirtPlatformConfig `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&ConfigurationPlan{}, &ConfigurationPlanList{})
+	SchemeBuilder.Register(&VirtPlatformConfig{}, &VirtPlatformConfigList{})
 }

@@ -22,7 +22,7 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the virt-advisor-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
-- configurationplan_admin_role.yaml
-- configurationplan_editor_role.yaml
-- configurationplan_viewer_role.yaml
+- virtplatformconfig_admin_role.yaml
+- virtplatformconfig_editor_role.yaml
+- virtplatformconfig_viewer_role.yaml
 

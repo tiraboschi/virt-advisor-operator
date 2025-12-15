@@ -1,5 +1,5 @@
-apiVersion: hco.kubevirt.io/v1alpha1
-kind: ConfigurationPlan
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
 metadata:
   labels:
     app.kubernetes.io/name: virt-advisor-operator

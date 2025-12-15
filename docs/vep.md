@@ -11,7 +11,7 @@
 
 ## Summary
 
-This proposal introduces a new controller and API, `ConfigurationPlan`, designed to act as an **Operational Governance Layer** for OpenShift Virtualization.
+This proposal introduces a new controller and API, `VirtPlatformConfig`, designed to act as an **Operational Governance Layer** for OpenShift Virtualization.
 
 Its primary purpose is to configure and tune external, 3rd-party operators (such as the Cluster Descheduler, Node Health Check, or Machine Config Operator) that are not directly owned by the HyperConverged Cluster Operator (HCO). Instead of automatically applying changes, this controller adopts an **"Advisor" pattern**: it detects optimization opportunities based on a selected `profile`, generates a detailed preview (diff) of the proposed changes, and waits for explicit administrative approval before execution.
 
@@ -40,7 +40,7 @@ We need a mechanism that bridges the gap between the Virtualization platform's n
 
 ## Proposal
 
-We propose a new CRD `ConfigurationPlan` in the `hco.kubevirt.io` API group. This resource acts as a state machine for requesting, calculating, and applying complex configuration changes.
+We propose a new CRD `VirtPlatformConfig` in the `advisor.kubevirt.io` API group. This resource acts as a state machine for requesting, calculating, and applying complex configuration changes.
 
 ### User Workflow & Entry Point
 
@@ -76,8 +76,8 @@ As an admin using GitOps, I want to enable a profile immediately.
 ### API Design
 
 ```yaml
-apiVersion: hco.kubevirt.io/v1alpha1
-kind: ConfigurationPlan
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
 metadata:
   generateName: plan-
 spec:
@@ -134,7 +134,7 @@ To prevent TOCTOU (Time-of-Check to Time-of-Use) conflict, we use a snapshot has
 ```mermaid
 sequenceDiagram
     participant User
-    participant ConfigPlan as ConfigurationPlan
+    participant ConfigPlan as VirtPlatformConfig
     participant Operator
     participant Target as 3rd Party CR
 
@@ -159,7 +159,7 @@ sequenceDiagram
 ```
 
 #### 3. Handling Concurrent Plans (Singleton Locking)
-To prevent conflicting instructions, we enforce a strict **One-Plan-Per-Profile** rule. A `profile` cannot be managed by multiple `ConfigurationPlan` objects simultaneously.
+To prevent conflicting instructions, we enforce a strict **One-Plan-Per-Profile** rule. A `profile` cannot be managed by multiple `VirtPlatformConfig` objects simultaneously.
 
 **The Logic:**
 If `plan-B` targets profile `LoadAware`, the operator checks if any other active plan exists for `LoadAware`. If yes, `plan-B` is blocked.
@@ -176,14 +176,14 @@ graph TD
 Once a plan is `Completed`, the Operator enters a **Governance Watch Mode**. We adopt an **"Inform, Don't Fight"** strategy.
 
 **Drift Strategy:**
-1.  **Fingerprinting:** Upon application, we annotate the target resource with `hco.kubevirt.io/applied-profile-hash`.
+1.  **Fingerprinting:** Upon application, we annotate the target resource with `advisor.kubevirt.io/applied-profile-hash`.
 2.  **Detection:** We watch the target. If `Hash(LiveFields) != AnnotationHash`, drift is detected.
 3.  **Reaction:** We set the Plan status to `Drifted` and emit a Prometheus metric. We do **not** auto-revert.
 
 ```mermaid
 sequenceDiagram
     participant Admin
-    participant Plan as ConfigurationPlan
+    participant Plan as VirtPlatformConfig
     participant Operator
     participant Target as 3rd Party CR
     participant AlertManager
@@ -224,7 +224,7 @@ To ensure stability during operator upgrades, we adhere to a **"Sticky Logic"** 
 ```mermaid
 sequenceDiagram
     participant Admin
-    participant Plan as ConfigurationPlan
+    participant Plan as VirtPlatformConfig
     participant OpV2 as Operator v2.0
 
     Note over Plan: Applied (v1 logic)
@@ -282,8 +282,8 @@ To illustrate the controller's behavior, we present a real-world scenario: enabl
 The admin creates the following Plan:
 
 ```yaml
-apiVersion: hco.kubevirt.io/v1alpha1
-kind: ConfigurationPlan
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
 metadata:
   generateName: enable-psi-scheduling-
 spec:
@@ -445,8 +445,8 @@ To ensure a specific configuration (e.g., a specific Descheduler profile) is val
 2.  Traverse the JSON Schema: `spec.versions[].schema.openAPIV3Schema.properties.spec.properties.profiles.items.enum`.
 3.  Check if `KubeVirtRelieveAndMigrate` or `DevKubeVirtRelieveAndMigrate` are in the allowed list.
 
-### 3. Handling Missing Dependencies in `ConfigurationPlan`
-If a soft dependency is missing or incompatible, the `ConfigurationPlan` must gracefully halt to avoid crashing the controller.
+### 3. Handling Missing Dependencies in `VirtPlatformConfig`
+If a soft dependency is missing or incompatible, the `VirtPlatformConfig` must gracefully halt to avoid crashing the controller.
 
 **State Transitions:**
 1.  **Detection:** Reconciler detects `KubeDescheduler` GVK is missing via RESTMapper.
@@ -482,15 +482,15 @@ func (r *CRDSentinel) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 
 Since this operator functions as a high-privilege **Governance Layer** capable of rebooting nodes (`MachineConfig`) and altering global scheduling (`KubeDescheduler`), its RBAC permissions must be broad but strictly justified.
 
-To mitigate the risk of this operator becoming a "privilege escalation backdoor," we rely on the `ConfigurationPlan` CR as the **Audit Log** and **Authorization Gate**. No action is taken without a persisted, approved CR.
+To mitigate the risk of this operator becoming a "privilege escalation backdoor," we rely on the `VirtPlatformConfig` CR as the **Audit Log** and **Authorization Gate**. No action is taken without a persisted, approved CR.
 
 ### 1. Core Permissions
 The operator requires standard access to its own API group to manage the state machine.
 
 ```yaml
 rules:
-  - apiGroups: ["hco.kubevirt.io"]
-    resources: ["configurationplans", "configurationplans/status"]
+  - apiGroups: ["advisor.kubevirt.io"]
+    resources: ["virtplatformconfigs", "virtplatformconfigs/status"]
     verbs: ["get", "list", "watch", "update", "patch"]
 ```
 
@@ -530,7 +530,7 @@ rules:
 ### 4. Security Mitigations
 * **No `update` verb:** We prefer `patch` (Server-Side Apply) over `update` to ensure we do not accidentally overwrite fields owned by other controllers (like GitOps agents).
 * **No `secrets` access:** This operator purely tunes configuration and infrastructure; it generally does not need to read Secrets, reducing the blast radius if compromised.
-* **Provenance & Traceability:** Since Kubernetes audit logs only show the Operator's ServiceAccount as the actor, we explicitly link resources to their intent. The operator will apply a hco.kubevirt.io/governed-by annotation to every created resource, containing the ConfigurationPlan name. This allows administrators to trace any infrastructure object (like a MachineConfig) back to the specific Governance CR that requested it.
+* **Provenance & Traceability:** Since Kubernetes audit logs only show the Operator's ServiceAccount as the actor, we explicitly link resources to their intent. The operator will apply a advisor.kubevirt.io/governed-by annotation to every created resource, containing the VirtPlatformConfig name. This allows administrators to trace any infrastructure object (like a MachineConfig) back to the specific Governance CR that requested it.
 
 ## Testing Strategy
 
@@ -540,7 +540,7 @@ Since this controller relies heavily on **Server-Side Apply (SSA)** for diff gen
 The primary testing vehicle will be **EnvTest**. This spins up a real `etcd` and `kube-apiserver` locally, ensuring that SSA, `managedFields`, and Dry-Run patches behave exactly as they would in production.
 
 **Key Test Scenarios:**
-* **Diff Generation:** Create a `ConfigurationPlan` with `action: DryRun`. Verify `status.diff` correctly hides fields owned by other managers (simulating ArgoCD ownership) and shows expected changes.
+* **Diff Generation:** Create a `VirtPlatformConfig` with `action: DryRun`. Verify `status.diff` correctly hides fields owned by other managers (simulating ArgoCD ownership) and shows expected changes.
 * **Safety Lock:**
     1.  Generate a Plan (`ReviewRequired`).
     2.  Manually patch the target resource (changing the hash).
@@ -588,7 +588,7 @@ While GitOps handles the *delivery* of configuration, it fails to solve the **Au
 * **Lack of Guardrails:** A typo in a manually crafted `MachineConfig` can trigger an immediate, unintended rolling reboot of the entire cluster. GitOps tools apply changes blindly; they do not semantically analyze the *impact* (e.g., "This change requires a reboot").
 * **Static vs. Dynamic:** A static GitOps manifest cannot easily adapt to the environment (e.g., "Only enable profile X if the Descheduler Operator is actually installed").
 
-The `ConfigurationPlan` acts as an **intelligence layer** that generates the correct, safe configuration for the user, which they can *then* manage via GitOps if they choose.
+The `VirtPlatformConfig` acts as an **intelligence layer** that generates the correct, safe configuration for the user, which they can *then* manage via GitOps if they choose.
 
 ### 3. OLM InstallPlans
 We considered using the Operator Lifecycle Manager (OLM) to bundle these configurations.
@@ -619,7 +619,7 @@ We adopted a **clean union type** approach that provides type safety while keepi
 
 **API Design:**
 ```go
-type ConfigurationPlanSpec struct {
+type VirtPlatformConfigSpec struct {
     // Profile selects the named capability (e.g., "load-aware-rebalancing")
     Profile string `json:"profile"`
 
@@ -656,8 +656,8 @@ type LoadAwareConfig struct {
 
 **User Experience:**
 ```yaml
-apiVersion: hco.kubevirt.io/v1alpha1
-kind: ConfigurationPlan
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
 metadata:
   name: load-aware-rebalancing
 spec:
@@ -673,7 +673,7 @@ spec:
 **Benefits:**
 - ✅ **Type-Safe**: CRD validates types at admission time
 - ✅ **No Redundancy**: No need to repeat profile name in `options`
-- ✅ **Discoverable**: `kubectl explain ConfigurationPlan.spec.options.loadAware`
+- ✅ **Discoverable**: `kubectl explain VirtPlatformConfig.spec.options.loadAware`
 - ✅ **IDE Support**: Autocomplete in YAML editors
 - ✅ **Profile Independence**: Each profile owns its config struct
 - ✅ **CEL Validation**: Ensures only the correct option field is set

@@ -38,36 +38,36 @@ const (
 	OperatorVersion = "v0.1.0"
 )
 
-// ConfigurationPlanReconciler reconciles a ConfigurationPlan object
-type ConfigurationPlanReconciler struct {
+// VirtPlatformConfigReconciler reconciles a VirtPlatformConfig object
+type VirtPlatformConfigReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=hco.kubevirt.io,resources=configurationplans,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=hco.kubevirt.io,resources=configurationplans/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=hco.kubevirt.io,resources=configurationplans/finalizers,verbs=update
+// +kubebuilder:rbac:groups=advisor.kubevirt.io,resources=virtplatformconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=advisor.kubevirt.io,resources=virtplatformconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=advisor.kubevirt.io,resources=virtplatformconfigs/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
-func (r *ConfigurationPlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Fetch the ConfigurationPlan
-	configPlan := &hcov1alpha1.ConfigurationPlan{}
+	// Fetch the VirtPlatformConfig
+	configPlan := &hcov1alpha1.VirtPlatformConfig{}
 	if err := r.Get(ctx, req.NamespacedName, configPlan); err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("ConfigurationPlan resource not found, ignoring")
+			logger.Info("VirtPlatformConfig resource not found, ignoring")
 			return ctrl.Result{}, nil
 		}
-		logger.Error(err, "Failed to get ConfigurationPlan")
+		logger.Error(err, "Failed to get VirtPlatformConfig")
 		return ctrl.Result{}, err
 	}
 
-	logger.Info("Reconciling ConfigurationPlan",
+	logger.Info("Reconciling VirtPlatformConfig",
 		"profile", configPlan.Spec.Profile,
 		"action", configPlan.Spec.Action,
 		"phase", configPlan.Status.Phase)
@@ -106,8 +106,8 @@ func (r *ConfigurationPlanReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	return ctrl.Result{}, nil
 }
 
-// handlePendingPhase initializes a new ConfigurationPlan
-func (r *ConfigurationPlanReconciler) handlePendingPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+// handlePendingPhase initializes a new VirtPlatformConfig
+func (r *VirtPlatformConfigReconciler) handlePendingPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Pending phase")
 
@@ -116,7 +116,7 @@ func (r *ConfigurationPlanReconciler) handlePendingPhase(ctx context.Context, co
 }
 
 // handleDraftingPhase generates the plan items from the profile
-func (r *ConfigurationPlanReconciler) handleDraftingPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+func (r *VirtPlatformConfigReconciler) handleDraftingPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Drafting phase", "profile", configPlan.Spec.Profile)
 
@@ -181,7 +181,7 @@ func (r *ConfigurationPlanReconciler) handleDraftingPhase(ctx context.Context, c
 }
 
 // handleReviewRequiredPhase waits for user to approve by changing action to Apply
-func (r *ConfigurationPlanReconciler) handleReviewRequiredPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+func (r *VirtPlatformConfigReconciler) handleReviewRequiredPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling ReviewRequired phase")
 
@@ -197,7 +197,7 @@ func (r *ConfigurationPlanReconciler) handleReviewRequiredPhase(ctx context.Cont
 }
 
 // areAllItemsPending checks if all items in the plan are still in pending state
-func areAllItemsPending(items []hcov1alpha1.ConfigurationPlanItem) bool {
+func areAllItemsPending(items []hcov1alpha1.VirtPlatformConfigItem) bool {
 	for _, item := range items {
 		if item.State != hcov1alpha1.ItemStatePending {
 			return false
@@ -207,7 +207,7 @@ func areAllItemsPending(items []hcov1alpha1.ConfigurationPlanItem) bool {
 }
 
 // checkOptimisticLock verifies that target resources haven't changed since plan generation
-func (r *ConfigurationPlanReconciler) checkOptimisticLock(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+func (r *VirtPlatformConfigReconciler) checkOptimisticLock(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 
 	// Only check on the FIRST entry to InProgress (when all items are still Pending)
@@ -246,7 +246,7 @@ func (r *ConfigurationPlanReconciler) checkOptimisticLock(ctx context.Context, c
 }
 
 // handleItemFailure updates item state to failed and checks failure policy
-func (r *ConfigurationPlanReconciler) handleItemFailure(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem, errMsg string, err error) (bool, error) {
+func (r *VirtPlatformConfigReconciler) handleItemFailure(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig, item *hcov1alpha1.VirtPlatformConfigItem, errMsg string, err error) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	now := metav1.Now()
@@ -268,7 +268,7 @@ func (r *ConfigurationPlanReconciler) handleItemFailure(ctx context.Context, con
 }
 
 // processItemExecution executes a plan item and handles the result
-func (r *ConfigurationPlanReconciler) processItemExecution(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem) (shouldAbort bool, shouldContinue bool, err error) {
+func (r *VirtPlatformConfigReconciler) processItemExecution(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig, item *hcov1alpha1.VirtPlatformConfigItem) (shouldAbort bool, shouldContinue bool, err error) {
 	logger := log.FromContext(ctx)
 
 	// Mark as in progress
@@ -298,7 +298,7 @@ func (r *ConfigurationPlanReconciler) processItemExecution(ctx context.Context, 
 
 // checkItemHealth checks item health and handles wait/timeout logic
 // Returns (shouldContinue, error) where shouldContinue indicates whether to continue to next item
-func (r *ConfigurationPlanReconciler) checkItemHealth(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem) (bool, error) {
+func (r *VirtPlatformConfigReconciler) checkItemHealth(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig, item *hcov1alpha1.VirtPlatformConfigItem) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	waitManager := plan.NewWaitStrategyManager()
@@ -336,7 +336,7 @@ func (r *ConfigurationPlanReconciler) checkItemHealth(ctx context.Context, confi
 }
 
 // handleItemWaitTimeout handles timeout logic for items waiting to become healthy
-func (r *ConfigurationPlanReconciler) handleItemWaitTimeout(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, item *hcov1alpha1.ConfigurationPlanItem, progressMsg string) (shouldAbort bool, shouldContinue bool, err error) {
+func (r *VirtPlatformConfigReconciler) handleItemWaitTimeout(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig, item *hcov1alpha1.VirtPlatformConfigItem, progressMsg string) (shouldAbort bool, shouldContinue bool, err error) {
 	logger := log.FromContext(ctx)
 
 	// Check if we've exceeded the optional waitTimeout
@@ -366,7 +366,7 @@ func (r *ConfigurationPlanReconciler) handleItemWaitTimeout(ctx context.Context,
 }
 
 // areAllItemsCompleted checks if all items are either completed or failed
-func areAllItemsCompleted(items []hcov1alpha1.ConfigurationPlanItem) bool {
+func areAllItemsCompleted(items []hcov1alpha1.VirtPlatformConfigItem) bool {
 	for _, item := range items {
 		if item.State != hcov1alpha1.ItemStateCompleted && item.State != hcov1alpha1.ItemStateFailed {
 			return false
@@ -376,7 +376,7 @@ func areAllItemsCompleted(items []hcov1alpha1.ConfigurationPlanItem) bool {
 }
 
 // finalizeInProgressPhase handles final completion logic with drift detection
-func (r *ConfigurationPlanReconciler) finalizeInProgressPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, hasFailures bool) error {
+func (r *VirtPlatformConfigReconciler) finalizeInProgressPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig, hasFailures bool) error {
 	logger := log.FromContext(ctx)
 
 	// Compute snapshot hash of current cluster state for drift detection
@@ -398,7 +398,7 @@ func (r *ConfigurationPlanReconciler) finalizeInProgressPhase(ctx context.Contex
 }
 
 // handleInProgressPhase applies the configuration items
-func (r *ConfigurationPlanReconciler) handleInProgressPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+func (r *VirtPlatformConfigReconciler) handleInProgressPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling InProgress phase")
 
@@ -455,7 +455,7 @@ func (r *ConfigurationPlanReconciler) handleInProgressPhase(ctx context.Context,
 }
 
 // handleCompletedPhase monitors for drift
-func (r *ConfigurationPlanReconciler) handleCompletedPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Completed phase - monitoring for drift")
 
@@ -497,7 +497,7 @@ func (r *ConfigurationPlanReconciler) handleCompletedPhase(ctx context.Context, 
 }
 
 // handleDriftedPhase handles the drifted state
-func (r *ConfigurationPlanReconciler) handleDriftedPhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan) error {
+func (r *VirtPlatformConfigReconciler) handleDriftedPhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Drifted phase")
 
@@ -535,7 +535,7 @@ func (r *ConfigurationPlanReconciler) handleDriftedPhase(ctx context.Context, co
 }
 
 // updatePhase updates the phase and adds a condition
-func (r *ConfigurationPlanReconciler) updatePhase(ctx context.Context, configPlan *hcov1alpha1.ConfigurationPlan, newPhase hcov1alpha1.PlanPhase, message string) error {
+func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPlan *hcov1alpha1.VirtPlatformConfig, newPhase hcov1alpha1.PlanPhase, message string) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Updating phase", "from", configPlan.Status.Phase, "to", newPhase, "message", message)
 
@@ -633,9 +633,9 @@ func stringPtrEqual(a, b *string) bool {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *ConfigurationPlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&hcov1alpha1.ConfigurationPlan{}).
-		Named("configurationplan").
+		For(&hcov1alpha1.VirtPlatformConfig{}).
+		Named("virtplatformconfig").
 		Complete(r)
 }

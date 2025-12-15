@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: configurationplans.hco.kubevirt.io
+  name: virtplatformconfigs.advisor.kubevirt.io
 spec:
-  group: hco.kubevirt.io
+  group: advisor.kubevirt.io
   names:
-    kind: ConfigurationPlan
-    listKind: ConfigurationPlanList
-    plural: configurationplans
-    singular: configurationplan
+    kind: VirtPlatformConfig
+    listKind: VirtPlatformConfigList
+    plural: virtplatformconfigs
+    singular: virtplatformconfig
   scope: Cluster
   versions:
   - additionalPrinterColumns:
@@ -30,7 +30,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: ConfigurationPlan is the Schema for the configurationplans API
+        description: VirtPlatformConfig is the Schema for the virtplatformconfigs
+          API
         properties:
           apiVersion:
             description: |-
@@ -50,7 +51,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: ConfigurationPlanSpec defines the desired state of ConfigurationPlan
+            description: VirtPlatformConfigSpec defines the desired state of VirtPlatformConfig
             properties:
               action:
                 default: DryRun
@@ -151,7 +152,7 @@ spec:
               rule: '!has(self.options) || (self.profile == ''load-aware-rebalancing''
                 ? has(self.options.loadAware) : true)'
           status:
-            description: ConfigurationPlanStatus defines the observed state of ConfigurationPlan
+            description: VirtPlatformConfigStatus defines the observed state of VirtPlatformConfig
             properties:
               appliedOptions:
                 description: |-
@@ -255,8 +256,8 @@ spec:
                 description: Items is the ordered list of configuration steps to be
                   executed.
                 items:
-                  description: ConfigurationPlanItem represents a single unit of work
-                    (e.g., one Descheduler patch).
+                  description: VirtPlatformConfigItem represents a single unit of
+                    work (e.g., one Descheduler patch).
                   properties:
                     diff:
                       description: |-
@@ -352,7 +353,7 @@ spec:
             type: object
         type: object
         x-kubernetes-validations:
-        - message: To ensure a singleton pattern, the ConfigurationPlan name must
+        - message: To ensure a singleton pattern, the VirtPlatformConfig name must
             exactly match the spec.profile.
           rule: self.metadata.name == self.spec.profile
     served: true

@@ -5,9 +5,9 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
-  - configurationplans
+  - virtplatformconfigs
   verbs:
   - create
   - delete
@@ -17,15 +17,15 @@ rules:
   - update
   - watch
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
-  - configurationplans/finalizers
+  - virtplatformconfigs/finalizers
   verbs:
   - update
 - apiGroups:
-  - hco.kubevirt.io
+  - advisor.kubevirt.io
   resources:
-  - configurationplans/status
+  - virtplatformconfigs/status
   verbs:
   - get
   - patch

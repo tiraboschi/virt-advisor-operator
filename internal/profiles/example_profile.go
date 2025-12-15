@@ -45,14 +45,14 @@ func (p *ExampleProfile) Validate(configOverrides map[string]string) error {
 }
 
 // GeneratePlanItems creates the configuration items for this profile.
-func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
 	// For now, return a simple example item
 	// In a real implementation, this would:
 	// 1. Read current cluster state
 	// 2. Determine what changes are needed
 	// 3. Generate plan items with diffs
 
-	items := []hcov1alpha1.ConfigurationPlanItem{
+	items := []hcov1alpha1.VirtPlatformConfigItem{
 		{
 			Name: "configure-example-component",
 			TargetRef: hcov1alpha1.ObjectReference{

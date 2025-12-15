@@ -18,14 +18,14 @@ import (
 // MachineConfigPool, Deployment waits for replicas ready, etc.)
 type WaitStrategy interface {
 	// ShouldWait returns true if this strategy applies to the given item
-	ShouldWait(item *hcov1alpha1.ConfigurationPlanItem) bool
+	ShouldWait(item *hcov1alpha1.VirtPlatformConfigItem) bool
 
 	// Wait polls the resource and related workloads until healthy or timeout
 	// Returns:
 	// - progressMessage: Human-readable status for item.message field
 	// - isHealthy: true if resource is healthy and ready
 	// - err: error if something went wrong (not timeout)
-	Wait(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) (progressMessage string, isHealthy bool, err error)
+	Wait(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) (progressMessage string, isHealthy bool, err error)
 }
 
 // WaitStrategyManager coordinates multiple wait strategies
@@ -54,7 +54,7 @@ func NewWaitStrategyManager() *WaitStrategyManager {
 //   - isHealthy: true if resource is healthy and ready
 //   - needsWait: true if this resource requires health monitoring
 //   - err: error if something went wrong during health check
-func (m *WaitStrategyManager) CheckHealthy(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) (progressMessage string, isHealthy bool, needsWait bool, err error) {
+func (m *WaitStrategyManager) CheckHealthy(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) (progressMessage string, isHealthy bool, needsWait bool, err error) {
 	// Find applicable strategy
 	var strategy WaitStrategy
 	for _, s := range m.strategies {
@@ -98,12 +98,12 @@ func NewMachineConfigWaitStrategy() *MachineConfigWaitStrategy {
 }
 
 // ShouldWait returns true for MachineConfig resources
-func (s *MachineConfigWaitStrategy) ShouldWait(item *hcov1alpha1.ConfigurationPlanItem) bool {
+func (s *MachineConfigWaitStrategy) ShouldWait(item *hcov1alpha1.VirtPlatformConfigItem) bool {
 	return item.TargetRef.Kind == "MachineConfig"
 }
 
 // Wait polls the MachineConfigPool status until all nodes are updated and ready
-func (s *MachineConfigWaitStrategy) Wait(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) (string, bool, error) {
+func (s *MachineConfigWaitStrategy) Wait(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) (string, bool, error) {
 	// Determine which MachineConfigPool to watch
 	// MachineConfigs have labels like "machineconfiguration.openshift.io/role: worker"
 	// which map to MachineConfigPool names
@@ -147,7 +147,7 @@ func (s *MachineConfigWaitStrategy) Wait(ctx context.Context, c client.Client, i
 
 // getMachineConfigPoolName extracts the pool name from MachineConfig labels
 // Typically from label "machineconfiguration.openshift.io/role: worker" -> "worker"
-func (s *MachineConfigWaitStrategy) getMachineConfigPoolName(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) string {
+func (s *MachineConfigWaitStrategy) getMachineConfigPoolName(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) string {
 	// Construct the MachineConfig GVK
 	mcGVK := schema.GroupVersionKind{
 		Group:   "machineconfiguration.openshift.io",

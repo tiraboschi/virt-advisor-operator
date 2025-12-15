@@ -44,7 +44,7 @@ make run
 # In another terminal, test the LoadAwareRebalancing profile
 kubectl apply -f config/samples/loadaware_sample.yaml
 
-# Watch the ConfigurationPlan progress through phases
+# Watch the VirtPlatformConfig progress through phases
 kubectl get configurationplan load-aware-rebalancing -w
 
 # View detailed status with diffs

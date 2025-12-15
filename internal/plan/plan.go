@@ -23,7 +23,7 @@ func buildResourceKey(gvk schema.GroupVersionKind, name, namespace string) strin
 }
 
 // extractManagedState extracts managed fields from an object for hashing
-func extractManagedState(obj *unstructured.Unstructured, item *hcov1alpha1.ConfigurationPlanItem) (map[string]interface{}, error) {
+func extractManagedState(obj *unstructured.Unstructured, item *hcov1alpha1.VirtPlatformConfigItem) (map[string]interface{}, error) {
 	managedState := make(map[string]interface{})
 
 	if len(item.ManagedFields) > 0 {
@@ -53,7 +53,7 @@ func extractManagedState(obj *unstructured.Unstructured, item *hcov1alpha1.Confi
 }
 
 // fetchResourceForHashing fetches a resource and returns its managed state or a sentinel value if not found
-func fetchResourceForHashing(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem, gvk schema.GroupVersionKind) (string, interface{}, error) {
+func fetchResourceForHashing(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem, gvk schema.GroupVersionKind) (string, interface{}, error) {
 	key := buildResourceKey(gvk, item.TargetRef.Name, item.TargetRef.Namespace)
 
 	obj, err := GetUnstructured(ctx, c, gvk, item.TargetRef.Name, item.TargetRef.Namespace)
@@ -77,7 +77,7 @@ func fetchResourceForHashing(ctx context.Context, c client.Client, item *hcov1al
 // referenced in the configuration plan items by fetching them from the cluster.
 // Only hashes the fields specified in ManagedFields to avoid false-positive drift
 // detection when unmanaged fields change.
-func ComputeCurrentStateHash(ctx context.Context, c client.Client, items []hcov1alpha1.ConfigurationPlanItem) (string, error) {
+func ComputeCurrentStateHash(ctx context.Context, c client.Client, items []hcov1alpha1.VirtPlatformConfigItem) (string, error) {
 	resourceStates := make(map[string]interface{})
 
 	for _, item := range items {
@@ -145,7 +145,7 @@ func splitPath(path string) []string {
 
 // DetectDrift compares the current state of resources against the stored snapshot hash.
 // Returns true if drift is detected, false if resources match the snapshot.
-func DetectDrift(ctx context.Context, c client.Client, items []hcov1alpha1.ConfigurationPlanItem, storedHash string) (bool, error) {
+func DetectDrift(ctx context.Context, c client.Client, items []hcov1alpha1.VirtPlatformConfigItem, storedHash string) (bool, error) {
 	currentHash, err := ComputeCurrentStateHash(ctx, c, items)
 	if err != nil {
 		return false, err

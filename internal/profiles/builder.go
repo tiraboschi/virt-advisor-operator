@@ -12,7 +12,7 @@ import (
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 )
 
-// PlanItemBuilder provides a safe way to build ConfigurationPlanItems
+// PlanItemBuilder provides a safe way to build VirtPlatformConfigItems
 // that ALWAYS use Server-Side Apply (SSA) for diff generation.
 //
 // This enforces the VEP requirement that diffs leverage API server validation,
@@ -42,7 +42,7 @@ type PlanItemBuilder struct {
 	message        string
 }
 
-// NewPlanItemBuilder creates a new builder for ConfigurationPlanItems.
+// NewPlanItemBuilder creates a new builder for VirtPlatformConfigItems.
 // All items built through this builder will use SSA dry-run for diff generation.
 func NewPlanItemBuilder(ctx context.Context, c client.Client, fieldManager string) *PlanItemBuilder {
 	return &PlanItemBuilder{
@@ -81,20 +81,20 @@ func (b *PlanItemBuilder) WithMessage(message string) *PlanItemBuilder {
 	return b
 }
 
-// Build constructs the ConfigurationPlanItem with an SSA-generated diff.
+// Build constructs the VirtPlatformConfigItem with an SSA-generated diff.
 //
 // This method:
 // 1. Validates required fields are set
 // 2. Determines impact severity if not manually set (based on resource existence)
 // 3. Generates the diff using SSA dry-run (API server validation)
-// 4. Returns a complete ConfigurationPlanItem
-func (b *PlanItemBuilder) Build() (hcov1alpha1.ConfigurationPlanItem, error) {
+// 4. Returns a complete VirtPlatformConfigItem
+func (b *PlanItemBuilder) Build() (hcov1alpha1.VirtPlatformConfigItem, error) {
 	// Validate required fields
 	if b.desired == nil {
-		return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("desired resource not set (use ForResource)")
+		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("desired resource not set (use ForResource)")
 	}
 	if b.name == "" {
-		return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("item name not set (use ForResource)")
+		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("item name not set (use ForResource)")
 	}
 
 	gvk := b.desired.GroupVersionKind()
@@ -107,7 +107,7 @@ func (b *PlanItemBuilder) Build() (hcov1alpha1.ConfigurationPlanItem, error) {
 		if isNew {
 			b.impactSeverity = fmt.Sprintf("Medium - Creates new %s", gvk.Kind)
 		} else if err != nil {
-			return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("failed to check if resource exists: %w", err)
+			return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to check if resource exists: %w", err)
 		} else {
 			b.impactSeverity = fmt.Sprintf("Low - Updates existing %s", gvk.Kind)
 		}
@@ -122,10 +122,10 @@ func (b *PlanItemBuilder) Build() (hcov1alpha1.ConfigurationPlanItem, error) {
 	// This ensures we leverage API server validation, defaulting, CEL, and webhooks
 	diff, err := plan.GenerateSSADiff(b.ctx, b.client, b.desired, b.fieldManager)
 	if err != nil {
-		return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("failed to generate SSA diff: %w", err)
+		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to generate SSA diff: %w", err)
 	}
 
-	return hcov1alpha1.ConfigurationPlanItem{
+	return hcov1alpha1.VirtPlatformConfigItem{
 		Name: b.name,
 		TargetRef: hcov1alpha1.ObjectReference{
 			APIVersion: gvk.GroupVersion().String(),

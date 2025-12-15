@@ -29,7 +29,7 @@ var (
 
 // ExecuteItem executes a single configuration plan item by applying the changes
 // using unstructured objects to avoid requiring third-party CRDs in the scheme
-func ExecuteItem(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) error {
+func ExecuteItem(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) error {
 	// Handle specific known types
 	switch item.TargetRef.Kind {
 	case "KubeDescheduler":
@@ -42,7 +42,7 @@ func ExecuteItem(ctx context.Context, c client.Client, item *hcov1alpha1.Configu
 }
 
 // executeKubeDescheduler applies the KubeDescheduler configuration using unstructured
-func executeKubeDescheduler(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) error {
+func executeKubeDescheduler(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) error {
 	// Build the desired KubeDescheduler object as unstructured
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(KubeDeschedulerGVK)
@@ -64,7 +64,7 @@ func executeKubeDescheduler(ctx context.Context, c client.Client, item *hcov1alp
 }
 
 // executeMachineConfig applies the MachineConfig configuration using unstructured
-func executeMachineConfig(ctx context.Context, c client.Client, item *hcov1alpha1.ConfigurationPlanItem) error {
+func executeMachineConfig(ctx context.Context, c client.Client, item *hcov1alpha1.VirtPlatformConfigItem) error {
 	// Build the desired MachineConfig object as unstructured
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(MachineConfigGVK)

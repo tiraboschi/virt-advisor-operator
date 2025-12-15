@@ -22,8 +22,8 @@ func (m *mockProfile) Validate(configOverrides map[string]string) error {
 	return nil
 }
 
-func (m *mockProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
-	return []hcov1alpha1.ConfigurationPlanItem{}, nil
+func (m *mockProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+	return []hcov1alpha1.VirtPlatformConfigItem{}, nil
 }
 
 func TestRegistry_Register(t *testing.T) {

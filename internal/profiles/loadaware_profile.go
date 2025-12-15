@@ -102,7 +102,7 @@ func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string
 }
 
 // GeneratePlanItems creates the configuration items for this profile
-func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
 	// First, check if required CRDs exist
 	checker := plan.NewCRDChecker(c)
 	requiredCRDs := []string{kubeDeschedulerCRD}
@@ -127,7 +127,7 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
 		return nil, fmt.Errorf("required CRDs not found in cluster: %v (install them first)", missingCRDs)
 	}
 
-	var items []hcov1alpha1.ConfigurationPlanItem
+	var items []hcov1alpha1.VirtPlatformConfigItem
 
 	deschedulingInterval := int32(defaultDeschedulingInterval)
 	if val, ok := configOverrides["deschedulingIntervalSeconds"]; ok {
@@ -279,7 +279,7 @@ func (p *LoadAwareRebalancingProfile) buildProfilesList(ctx context.Context, c c
 }
 
 // generateDeschedulerItem creates a plan item for KubeDescheduler configuration
-func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Context, c client.Client, interval int32, configOverrides map[string]string) (hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Context, c client.Client, interval int32, configOverrides map[string]string) (hcov1alpha1.VirtPlatformConfigItem, error) {
 	// Select the best available descheduler profile
 	profile := p.selectDeschedulerProfile(ctx, c)
 
@@ -315,7 +315,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	}
 
 	if err := unstructured.SetNestedMap(desired.Object, spec, "spec"); err != nil {
-		return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("failed to set spec: %w", err)
+		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
 	}
 
 	// Determine managed fields based on whether profileCustomizations is set
@@ -333,7 +333,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 }
 
 // generateMachineConfigItem creates a plan item for MachineConfig PSI enablement
-func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Context, c client.Client) (hcov1alpha1.ConfigurationPlanItem, error) {
+func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Context, c client.Client) (hcov1alpha1.VirtPlatformConfigItem, error) {
 	mcName := "99-worker-psi-karg"
 
 	// Build the desired MachineConfig object
@@ -350,7 +350,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 	}
 
 	if err := unstructured.SetNestedMap(desired.Object, spec, "spec"); err != nil {
-		return hcov1alpha1.ConfigurationPlanItem{}, fmt.Errorf("failed to set spec: %w", err)
+		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
 	}
 
 	// Determine impact severity based on effect-based validation
