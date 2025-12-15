@@ -107,8 +107,11 @@ spec:
                           Controls how aggressive the descheduler is when detecting imbalanced nodes.
                         enum:
                         - Low
-                        - AsymmetricLow
+                        - Medium
                         - High
+                        - AsymmetricLow
+                        - AsymmetricMedium
+                        - AsymmetricHigh
                         type: string
                       enablePSIMetrics:
                         default: true
@@ -117,6 +120,16 @@ spec:
                           When enabled, creates a MachineConfig with psi=1 kernel argument.
                           When disabled, the MachineConfig item is not included in the plan.
                         type: boolean
+                      mode:
+                        default: Automatic
+                        description: |-
+                          Mode controls when descheduling is enabled.
+                          Automatic: descheduler runs continuously based on the interval.
+                          Predictive: (future) uses ML/heuristics to decide when to run.
+                        enum:
+                        - Automatic
+                        - Predictive
+                        type: string
                     type: object
                 type: object
               profile:
@@ -179,8 +192,11 @@ spec:
                           Controls how aggressive the descheduler is when detecting imbalanced nodes.
                         enum:
                         - Low
-                        - AsymmetricLow
+                        - Medium
                         - High
+                        - AsymmetricLow
+                        - AsymmetricMedium
+                        - AsymmetricHigh
                         type: string
                       enablePSIMetrics:
                         default: true
@@ -189,6 +205,16 @@ spec:
                           When enabled, creates a MachineConfig with psi=1 kernel argument.
                           When disabled, the MachineConfig item is not included in the plan.
                         type: boolean
+                      mode:
+                        default: Automatic
+                        description: |-
+                          Mode controls when descheduling is enabled.
+                          Automatic: descheduler runs continuously based on the interval.
+                          Predictive: (future) uses ML/heuristics to decide when to run.
+                        enum:
+                        - Automatic
+                        - Predictive
+                        type: string
                     type: object
                 type: object
               conditions:
@@ -259,6 +285,12 @@ spec:
                   description: VirtPlatformConfigItem represents a single unit of
                     work (e.g., one Descheduler patch).
                   properties:
+                    desiredState:
+                      description: |-
+                        DesiredState contains the complete desired configuration to apply.
+                        Stored as unstructured JSON to support any Kubernetes resource.
+                        The executor uses this to perform the actual apply operation.
+                      x-kubernetes-preserve-unknown-fields: true
                     diff:
                       description: |-
                         Diff contains the Unified Diff (Git style) showing the proposed changes.
@@ -327,6 +359,13 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  ObservedGeneration reflects the generation of the most recently observed spec.
+                  When this differs from metadata.generation, it indicates the spec has changed
+                  and the plan should be regenerated (even if currently in Failed state).
+                format: int64
+                type: integer
               operatorVersion:
                 description: |-
                   OperatorVersion tracks the version of the operator logic used to generate

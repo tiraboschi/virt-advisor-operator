@@ -120,6 +120,14 @@ type LoadAwareConfig struct {
 	// +optional
 	DeschedulingIntervalSeconds *int32 `json:"deschedulingIntervalSeconds,omitempty"`
 
+	// Mode controls when descheduling is enabled.
+	// Automatic: descheduler runs continuously based on the interval.
+	// Predictive: (future) uses ML/heuristics to decide when to run.
+	// +kubebuilder:default="Automatic"
+	// +kubebuilder:validation:Enum=Automatic;Predictive
+	// +optional
+	Mode *string `json:"mode,omitempty"`
+
 	// EnablePSIMetrics controls whether to configure PSI kernel parameter via MachineConfig.
 	// When enabled, creates a MachineConfig with psi=1 kernel argument.
 	// When disabled, the MachineConfig item is not included in the plan.
@@ -130,7 +138,7 @@ type LoadAwareConfig struct {
 	// DevDeviationThresholds sets the load deviation sensitivity for descheduling.
 	// Controls how aggressive the descheduler is when detecting imbalanced nodes.
 	// +kubebuilder:default="AsymmetricLow"
-	// +kubebuilder:validation:Enum=Low;AsymmetricLow;High
+	// +kubebuilder:validation:Enum=Low;Medium;High;AsymmetricLow;AsymmetricMedium;AsymmetricHigh
 	// +optional
 	DevDeviationThresholds *string `json:"devDeviationThresholds,omitempty"`
 }
@@ -178,6 +186,14 @@ type VirtPlatformConfigItem struct {
 	// +optional
 	Diff string `json:"diff,omitempty"`
 
+	// DesiredState contains the complete desired configuration to apply.
+	// Stored as unstructured JSON to support any Kubernetes resource.
+	// The executor uses this to perform the actual apply operation.
+	// +optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +kubebuilder:validation:Schemaless
+	DesiredState map[string]interface{} `json:"desiredState,omitempty"`
+
 	// State tracks the execution progress of this specific item.
 	// +kubebuilder:default="Pending"
 	State ItemState `json:"state,omitempty"`
@@ -214,6 +230,12 @@ type ObjectReference struct {
 type VirtPlatformConfigStatus struct {
 	// Phase is the high-level summary of the plan's lifecycle.
 	Phase PlanPhase `json:"phase,omitempty"`
+
+	// ObservedGeneration reflects the generation of the most recently observed spec.
+	// When this differs from metadata.generation, it indicates the spec has changed
+	// and the plan should be regenerated (even if currently in Failed state).
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// SourceSnapshotHash is the SHA256 hash of the target objects' specs
 	// at the moment the plan was generated. Used for Optimistic Locking.

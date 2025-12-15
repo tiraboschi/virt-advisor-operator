@@ -25,7 +25,7 @@ type ApplyOptions struct {
 func DefaultApplyOptions() *ApplyOptions {
 	return &ApplyOptions{
 		FieldManager: "virt-advisor-operator",
-		Force:        false,
+		Force:        true, // Force ownership to claim fields from manual changes
 		DryRun:       false,
 	}
 }

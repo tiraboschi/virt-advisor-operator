@@ -38,3 +38,31 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - machineconfiguration.openshift.io
+  resources:
+  - machineconfigpools
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - machineconfiguration.openshift.io
+  resources:
+  - machineconfigs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - operator.openshift.io
+  resources:
+  - kubedeschedulers
+  verbs:
+  - get
+  - list
+  - patch
+  - watch

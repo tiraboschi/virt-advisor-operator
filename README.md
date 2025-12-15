@@ -10,7 +10,12 @@ The virt-advisor-operator implements a declarative "Plan" pattern for managing c
 
 - **Preview & Approve Workflow**: DryRun mode calculates and displays proposed changes before applying them
 - **Profile-Based Configuration**: Select from predefined capability sets (e.g., "LoadAwareRebalancing")
-- **Drift Detection**: Monitors for configuration drift from the intended state
+- **Drift Detection & Remediation**:
+  - Monitors for configuration drift during and after application
+  - Automatically transitions to `Drifted` phase when drift is detected
+  - Supports manual remediation workflow (default) or automatic drift correction (aggressive mode)
+  - Prevents fighting with other controllers or manual changes
+- **Condition Management**: Standard Kubernetes conditions (Drafting, InProgress, Drifted, Completed) for monitoring
 - **Optimistic Locking**: Uses snapshot hashing to prevent conflicting changes
 - **Granular Control**: Fine-grained failure policies and per-item status tracking
 - **Safe Evolution**: Server-side apply ensures accurate diffs and controlled updates
@@ -92,6 +97,10 @@ Implements the VEP's load-aware rebalancing capability by configuring:
 
 **Supported Config Overrides:**
 - `deschedulingIntervalSeconds`: How often to run descheduling (default: 60 = 1 minute)
+- `mode`: Controls when descheduling is enabled (default: Automatic)
+  - Valid values: Automatic, Predictive
+  - Automatic: descheduler runs continuously based on the interval
+  - Predictive: (future) uses ML/heuristics to decide when to run
 - `enablePSIMetrics`: Whether to enable PSI kernel metrics (default: true)
 - `devDeviationThresholds`: Deviation threshold for load balancing (default: AsymmetricLow)
   - Valid values: Low, Medium, High, AsymmetricLow, AsymmetricMedium, AsymmetricHigh
@@ -101,7 +110,20 @@ Implements the VEP's load-aware rebalancing capability by configuring:
 - Medium: Creates or updates descheduler configuration
 - High: Enables PSI metrics (requires node reboot in real OpenShift clusters)
 
-### To Deploy on the cluster
+## Deployment
+
+### OpenShift Cluster Deployment
+
+**For production OpenShift deployments**, see the comprehensive [OpenShift Deployment Guide](docs/OPENSHIFT_DEPLOYMENT.md) which covers:
+- Prerequisites and required operators
+- Building and pushing images
+- Installing and deploying the operator
+- Safe workflow with DryRun → Review → Apply
+- Understanding MachineConfig impact (node reboots)
+- Monitoring rollouts and troubleshooting
+- Production best practices and rollback procedures
+
+### Generic Kubernetes Cluster Deployment
 
 **Container Tool Support**
 

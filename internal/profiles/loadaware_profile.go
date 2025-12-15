@@ -43,6 +43,9 @@ const (
 
 	// Default value for devDeviationThresholds in profileCustomization
 	defaultDeviationThresholds = "AsymmetricLow"
+
+	// Default mode for descheduler
+	defaultMode = "Automatic"
 )
 
 var (
@@ -304,9 +307,16 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	// Build the desired KubeDescheduler object
 	desired := plan.CreateUnstructured(KubeDeschedulerGVK, kubeDeschedulerName, kubeDeschedulerNamespace)
 
+	// Default mode to Automatic
+	mode := defaultMode
+	if customMode, ok := configOverrides["mode"]; ok && customMode != "" {
+		mode = customMode
+	}
+
 	// Set the spec with our desired configuration
 	spec := map[string]interface{}{
 		"deschedulingIntervalSeconds": int64(interval),
+		"mode":                        mode,
 		"profiles":                    profiles,
 	}
 
@@ -334,7 +344,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	}
 
 	// Determine managed fields based on whether profileCustomizations is set
-	managedFields := []string{"spec.deschedulingIntervalSeconds", "spec.profiles"}
+	managedFields := []string{"spec.deschedulingIntervalSeconds", "spec.mode", "spec.profiles"}
 	if profile == profileKubeVirtRelieveAndMigrate || profile == profileDevKubeVirtRelieveAndMigrate {
 		managedFields = append(managedFields, "spec.profileCustomizations")
 	}

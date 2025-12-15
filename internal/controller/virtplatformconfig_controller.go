@@ -23,10 +23,17 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
@@ -48,6 +55,9 @@ type VirtPlatformConfigReconciler struct {
 // +kubebuilder:rbac:groups=advisor.kubevirt.io,resources=virtplatformconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=advisor.kubevirt.io,resources=virtplatformconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=advisor.kubevirt.io,resources=virtplatformconfigs/finalizers,verbs=update
+// +kubebuilder:rbac:groups=operator.openshift.io,resources=kubedeschedulers,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=machineconfiguration.openshift.io,resources=machineconfigs,verbs=get;list;watch;create;delete;patch
+// +kubebuilder:rbac:groups=machineconfiguration.openshift.io,resources=machineconfigpools,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -89,11 +99,39 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	case advisorv1alpha1.PlanPhaseCompletedWithErrors:
 		err = r.handleCompletedPhase(ctx, configPlan)
 	case advisorv1alpha1.PlanPhaseDrifted:
-		err = r.handleDriftedPhase(ctx, configPlan)
+		// Check if spec has changed (e.g., user changed action to DryRun for regeneration)
+		if configPlan.Status.ObservedGeneration != configPlan.Generation {
+			logger.Info("Spec changed since drift detection, regenerating plan",
+				"observedGeneration", configPlan.Status.ObservedGeneration,
+				"currentGeneration", configPlan.Generation)
+			err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Regenerating after spec change")
+		} else {
+			err = r.handleDriftedPhase(ctx, configPlan)
+		}
 	case advisorv1alpha1.PlanPhaseFailed:
-		// Failed plans don't automatically recover
-		logger.Info("Plan is in Failed state, manual intervention required")
-		return ctrl.Result{}, nil
+		// Check if spec has changed since failure (retry on spec change)
+		if configPlan.Status.ObservedGeneration != configPlan.Generation {
+			logger.Info("Spec changed since failure, retrying plan generation",
+				"observedGeneration", configPlan.Status.ObservedGeneration,
+				"currentGeneration", configPlan.Generation)
+			err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Retrying after spec change")
+		} else {
+			// Failed plans don't automatically recover unless spec changes
+			logger.Info("Plan is in Failed state, manual intervention required or change spec to retry")
+			return ctrl.Result{}, nil
+		}
+	case advisorv1alpha1.PlanPhasePrerequisiteFailed:
+		// Check if spec has changed since prerequisite failure (retry on spec change)
+		if configPlan.Status.ObservedGeneration != configPlan.Generation {
+			logger.Info("Spec changed since prerequisite failure, retrying",
+				"observedGeneration", configPlan.Status.ObservedGeneration,
+				"currentGeneration", configPlan.Generation)
+			err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Retrying after spec change")
+		} else {
+			// Prerequisites still missing, check periodically
+			logger.Info("Prerequisites not met, will retry periodically")
+			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+		}
 	default:
 		logger.Info("Unknown phase, resetting to Pending", "phase", configPlan.Status.Phase)
 		err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Resetting unknown phase")
@@ -340,6 +378,13 @@ func (r *VirtPlatformConfigReconciler) checkItemHealth(ctx context.Context, conf
 	item.State = advisorv1alpha1.ItemStateCompleted
 	item.Message = progressMsg
 
+	// Regenerate diff to show current state vs. desired state
+	// After successful apply, this should be empty (or show any drift that occurred)
+	if err := r.refreshItemDiff(ctx, item); err != nil {
+		logger.Error(err, "Failed to refresh diff after completion", "item", item.Name)
+		// Non-fatal - continue with completion
+	}
+
 	if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
 		return false, fmt.Errorf("failed to update item success status: %w", updateErr)
 	}
@@ -402,10 +447,28 @@ func (r *VirtPlatformConfigReconciler) finalizeInProgressPhase(ctx context.Conte
 		logger.Info("Updated snapshot hash for drift detection", "hash", currentStateHash)
 	}
 
+	// Check if any completed items have drifted
+	hasDrift := false
+	for i := range configPlan.Status.Items {
+		item := &configPlan.Status.Items[i]
+		if item.State == advisorv1alpha1.ItemStateCompleted &&
+		   item.Message == "Configuration has drifted from desired state" {
+			hasDrift = true
+			logger.Info("Item has drifted", "item", item.Name)
+			break
+		}
+	}
+
 	if hasFailures {
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseCompletedWithErrors,
 			"Plan completed with some errors")
 	}
+
+	if hasDrift {
+		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseDrifted,
+			"Configuration drift detected - one or more items have drifted from desired state")
+	}
+
 	return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseCompleted,
 		"All items applied successfully")
 }
@@ -426,11 +489,18 @@ func (r *VirtPlatformConfigReconciler) handleInProgressPhase(ctx context.Context
 	for i := range configPlan.Status.Items {
 		item := &configPlan.Status.Items[i]
 
-		// Skip already processed items
-		if item.State == advisorv1alpha1.ItemStateCompleted || item.State == advisorv1alpha1.ItemStateFailed {
-			if item.State == advisorv1alpha1.ItemStateFailed {
-				hasFailures = true
+		// For completed items, check for drift while other items are still in progress
+		if item.State == advisorv1alpha1.ItemStateCompleted {
+			if err := r.checkItemDrift(ctx, configPlan, item); err != nil {
+				logger.Error(err, "Failed to check drift for completed item", "item", item.Name)
+				// Non-fatal - continue with other items
 			}
+			continue
+		}
+
+		// Skip failed items
+		if item.State == advisorv1alpha1.ItemStateFailed {
+			hasFailures = true
 			continue
 		}
 
@@ -479,6 +549,17 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 			"Options changed - regenerating plan")
 	}
 
+	// First check if any items already have drift detected (from InProgress phase monitoring)
+	for i := range configPlan.Status.Items {
+		item := &configPlan.Status.Items[i]
+		if item.State == advisorv1alpha1.ItemStateCompleted &&
+		   item.Message == "Configuration has drifted from desired state" {
+			logger.Info("Item drift already detected, transitioning to Drifted phase", "item", item.Name)
+			return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseDrifted,
+				"Configuration drift detected - one or more items have drifted from desired state")
+		}
+	}
+
 	// Check if we have a stored snapshot hash
 	if configPlan.Status.SourceSnapshotHash == "" {
 		logger.Info("No snapshot hash stored, computing current state")
@@ -506,6 +587,44 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 	}
 
 	logger.V(1).Info("No drift detected, configuration is in sync")
+
+	// Ensure phase-related conditions are properly set even when staying in Completed phase
+	// This handles the case where we're already in Completed phase but conditions are stale
+	needsUpdate := false
+	for i, c := range configPlan.Status.Conditions {
+		switch c.Type {
+		case "Drifted":
+			if c.Status == metav1.ConditionTrue {
+				configPlan.Status.Conditions[i].Status = metav1.ConditionFalse
+				configPlan.Status.Conditions[i].Reason = "NoDrift"
+				configPlan.Status.Conditions[i].Message = "Configuration is in sync with desired state"
+				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
+				needsUpdate = true
+			}
+		case "Drafting":
+			if c.Status == metav1.ConditionTrue {
+				configPlan.Status.Conditions[i].Status = metav1.ConditionFalse
+				configPlan.Status.Conditions[i].Reason = "NotDrafting"
+				configPlan.Status.Conditions[i].Message = "Plan generation completed"
+				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
+				needsUpdate = true
+			}
+		case "InProgress":
+			if c.Status == metav1.ConditionTrue {
+				configPlan.Status.Conditions[i].Status = metav1.ConditionFalse
+				configPlan.Status.Conditions[i].Reason = "NotInProgress"
+				configPlan.Status.Conditions[i].Message = "Plan application completed"
+				configPlan.Status.Conditions[i].LastTransitionTime = metav1.Now()
+				needsUpdate = true
+			}
+		}
+	}
+
+	if needsUpdate {
+		logger.Info("Updating phase-related conditions to reflect Completed state")
+		return r.Status().Update(ctx, configPlan)
+	}
+
 	return nil
 }
 
@@ -517,33 +636,109 @@ func (r *VirtPlatformConfigReconciler) handleDriftedPhase(ctx context.Context, c
 	// In Drifted phase, we monitor whether drift has been corrected manually
 	// or if the user wants to re-apply the configuration
 
-	// Check if drift still exists
-	drifted, err := plan.DetectDrift(ctx, r.Client, configPlan.Status.Items, configPlan.Status.SourceSnapshotHash)
-	if err != nil {
-		logger.Error(err, "Failed to detect drift")
-		return nil // Don't fail the reconciliation
+	// First check for per-item drift messages (set during monitoring)
+	hasItemDrift := false
+	for i := range configPlan.Status.Items {
+		item := &configPlan.Status.Items[i]
+		if item.State == advisorv1alpha1.ItemStateCompleted &&
+		   item.Message == "Configuration has drifted from desired state" {
+			hasItemDrift = true
+			break
+		}
 	}
 
-	if !drifted {
+	// If no per-item drift messages, check hash-based drift detection
+	var drifted bool
+	var err error
+	if !hasItemDrift {
+		drifted, err = plan.DetectDrift(ctx, r.Client, configPlan.Status.Items, configPlan.Status.SourceSnapshotHash)
+		if err != nil {
+			logger.Error(err, "Failed to detect drift")
+			return nil // Don't fail the reconciliation
+		}
+	}
+
+	// If neither per-item nor hash-based drift exists, drift has been corrected
+	if !hasItemDrift && !drifted {
 		// Drift has been manually corrected
 		logger.Info("Drift has been corrected, transitioning back to Completed")
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseCompleted,
 			"Drift has been corrected - configuration is back in sync")
 	}
 
-	// If action is set to Apply, user wants to re-apply and fix the drift
-	if configPlan.Spec.Action == advisorv1alpha1.PlanActionApply {
-		logger.Info("User requested re-apply to fix drift")
+	// Only re-apply if bypassOptimisticLock is true (aggressive continuous reconciliation)
+	// Otherwise, require manual intervention to avoid fighting with other controllers
+	if configPlan.Spec.Action == advisorv1alpha1.PlanActionApply && configPlan.Spec.BypassOptimisticLock {
+		logger.Info("Auto-correcting drift (bypassOptimisticLock=true)")
 		// Reset all items to Pending
 		for i := range configPlan.Status.Items {
 			configPlan.Status.Items[i].State = advisorv1alpha1.ItemStatePending
-			configPlan.Status.Items[i].Message = "Re-applying to fix drift"
+			configPlan.Status.Items[i].Message = "Re-applying to fix drift (bypassOptimisticLock)"
 		}
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseInProgress,
-			"Re-applying configuration to fix drift")
+			"Auto-correcting drift (bypassOptimisticLock enabled)")
 	}
 
-	logger.Info("Drift still present, waiting for manual correction or re-apply")
+	// Drift detected but NOT auto-correcting to avoid fighting with other controllers
+	// User must change action to DryRun (to regenerate plan) then back to Apply to retry
+	logger.Info("Drift detected - manual intervention required. Change action to DryRun then Apply to retry, or set bypassOptimisticLock=true for continuous reconciliation")
+	return nil
+}
+
+// checkItemDrift checks if a completed item has drifted from its desired state.
+// If drift is detected, updates the item's diff and message to reflect the current state.
+func (r *VirtPlatformConfigReconciler) checkItemDrift(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig, item *advisorv1alpha1.VirtPlatformConfigItem) error {
+	logger := log.FromContext(ctx)
+
+	// Refresh the diff to check for drift
+	oldDiff := item.Diff
+	if err := r.refreshItemDiff(ctx, item); err != nil {
+		return fmt.Errorf("failed to refresh diff for drift detection: %w", err)
+	}
+
+	// Check if diff changed (indicating drift)
+	hasDrift := item.Diff != oldDiff && item.Diff != "--- "+item.TargetRef.Name+" ("+item.TargetRef.Kind+")\n+++ "+item.TargetRef.Name+" ("+item.TargetRef.Kind+")\n(no changes)\n"
+
+	if hasDrift {
+		logger.Info("Drift detected on completed item", "item", item.Name, "target", fmt.Sprintf("%s/%s", item.TargetRef.Kind, item.TargetRef.Name))
+		item.Message = "Configuration has drifted from desired state"
+
+		// Update status to reflect drift
+		if updateErr := r.Status().Update(ctx, configPlan); updateErr != nil {
+			logger.Error(updateErr, "Failed to update item with drift status", "item", item.Name)
+		}
+	}
+
+	return nil
+}
+
+// refreshItemDiff regenerates the diff for an item based on current cluster state vs. desired state.
+// This is useful after applying changes to show if the apply succeeded or if drift has occurred.
+func (r *VirtPlatformConfigReconciler) refreshItemDiff(ctx context.Context, item *advisorv1alpha1.VirtPlatformConfigItem) error {
+	logger := log.FromContext(ctx)
+
+	// Skip if no desired state (shouldn't happen, but be defensive)
+	if item.DesiredState == nil {
+		return fmt.Errorf("cannot refresh diff: item has no desired state")
+	}
+
+	// Convert desired state to unstructured
+	desired := &unstructured.Unstructured{
+		Object: item.DesiredState,
+	}
+
+	// Regenerate the diff using SSA dry-run
+	// This shows current state vs. desired state
+	// If apply succeeded and there's no drift, diff should be empty or minimal
+	newDiff, err := plan.GenerateSSADiff(ctx, r.Client, desired, "virt-advisor-operator")
+	if err != nil {
+		return fmt.Errorf("failed to regenerate diff: %w", err)
+	}
+
+	// Update the item's diff
+	item.Diff = newDiff
+	logger.V(1).Info("Refreshed diff for item", "item", item.Name, "diffLength", len(newDiff))
+
 	return nil
 }
 
@@ -553,6 +748,10 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 	logger.Info("Updating phase", "from", configPlan.Status.Phase, "to", newPhase, "message", message)
 
 	configPlan.Status.Phase = newPhase
+
+	// Update observedGeneration to track which spec version we're processing
+	// This enables automatic retry when spec changes
+	configPlan.Status.ObservedGeneration = configPlan.Generation
 
 	// Add a condition
 	condition := metav1.Condition{
@@ -576,7 +775,55 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 		configPlan.Status.Conditions = append(configPlan.Status.Conditions, condition)
 	}
 
+	// Manage phase-related conditions based on phase transitions
+	switch newPhase {
+	case advisorv1alpha1.PlanPhaseDrafting:
+		r.setCondition(configPlan, "Drafting", metav1.ConditionTrue, "Drafting", "Generating plan from profile")
+		r.setCondition(configPlan, "InProgress", metav1.ConditionFalse, "NotInProgress", "Plan is not being applied")
+
+	case advisorv1alpha1.PlanPhaseInProgress:
+		r.setCondition(configPlan, "Drafting", metav1.ConditionFalse, "NotDrafting", "Plan generation completed")
+		r.setCondition(configPlan, "InProgress", metav1.ConditionTrue, "InProgress", "Applying plan configuration")
+
+	case advisorv1alpha1.PlanPhaseCompleted:
+		r.setCondition(configPlan, "Drafting", metav1.ConditionFalse, "NotDrafting", "Plan generation completed")
+		r.setCondition(configPlan, "InProgress", metav1.ConditionFalse, "NotInProgress", "Plan application completed")
+		r.setCondition(configPlan, "Drifted", metav1.ConditionFalse, "NoDrift", "Configuration is in sync with desired state")
+
+	case advisorv1alpha1.PlanPhaseDrifted:
+		r.setCondition(configPlan, "Drafting", metav1.ConditionFalse, "NotDrafting", "Plan generation completed")
+		r.setCondition(configPlan, "InProgress", metav1.ConditionFalse, "NotInProgress", "Waiting for manual intervention or aggressive remediation")
+		r.setCondition(configPlan, "Drifted", metav1.ConditionTrue, "DriftDetected", "Configuration has drifted from desired state")
+	}
+
 	return r.Status().Update(ctx, configPlan)
+}
+
+// setCondition sets or updates a specific condition
+func (r *VirtPlatformConfigReconciler) setCondition(configPlan *advisorv1alpha1.VirtPlatformConfig, conditionType string, status metav1.ConditionStatus, reason, message string) {
+	condition := metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: metav1.Now(),
+	}
+
+	// Update or append condition
+	found := false
+	for i, c := range configPlan.Status.Conditions {
+		if c.Type == condition.Type {
+			// Only update if status changed or message changed
+			if c.Status != condition.Status || c.Message != condition.Message {
+				configPlan.Status.Conditions[i] = condition
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		configPlan.Status.Conditions = append(configPlan.Status.Conditions, condition)
+	}
 }
 
 // optionsChanged compares two ProfileOptions to detect changes
@@ -649,6 +896,13 @@ func stringPtrEqual(a, b *string) bool {
 func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&advisorv1alpha1.VirtPlatformConfig{}).
+		// Watch managed resources for drift detection
+		Watches(
+			&unstructured.Unstructured{},
+			r.enqueueManagedResourceOwners(),
+			// Optimize: Only watch specific resource types we manage
+			builder.WithPredicates(r.managedResourcePredicate()),
+		).
 		Named("virtplatformconfig").
 		Complete(r)
 }

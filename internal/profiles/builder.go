@@ -135,6 +135,7 @@ func (b *PlanItemBuilder) Build() (advisorv1alpha1.VirtPlatformConfigItem, error
 		},
 		ImpactSeverity:     b.impactSeverity,
 		Diff:               diff,
+		DesiredState:       b.desired.Object, // Store the complete desired configuration
 		State:              advisorv1alpha1.ItemStatePending,
 		Message:            b.message,
 		ManagedFields:      b.managedFields,

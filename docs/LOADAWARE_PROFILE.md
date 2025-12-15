@@ -152,18 +152,24 @@ The profile supports the following overrides:
 ```yaml
 spec:
   profile: load-aware-rebalancing
-  configOverrides:
-    # Descheduling interval in seconds (default: 60 = 1 minute)
-    deschedulingIntervalSeconds: "60"
+  options:
+    loadAware:
+      # Descheduling interval in seconds (default: 60 = 1 minute)
+      deschedulingIntervalSeconds: 60
 
-    # Enable PSI metrics (default: true)
-    # Set to "false" to skip MachineConfig changes
-    enablePSIMetrics: "true"
+      # Mode controls when descheduling is enabled (default: Automatic)
+      # Automatic: descheduler runs continuously based on the interval
+      # Predictive: (future) uses ML/heuristics to decide when to run
+      mode: Automatic
 
-    # Deviation threshold for load balancing (default: AsymmetricLow)
-    # Only applies to KubeVirtRelieveAndMigrate and DevKubeVirtRelieveAndMigrate
-    # Valid values: Low, Medium, High, AsymmetricLow, AsymmetricMedium, AsymmetricHigh
-    devDeviationThresholds: "AsymmetricLow"
+      # Enable PSI metrics (default: true)
+      # Set to false to skip MachineConfig changes
+      enablePSIMetrics: true
+
+      # Deviation threshold for load balancing (default: AsymmetricLow)
+      # Only applies to KubeVirtRelieveAndMigrate and DevKubeVirtRelieveAndMigrate
+      # Valid values: Low, Medium, High, AsymmetricLow, AsymmetricMedium, AsymmetricHigh
+      devDeviationThresholds: AsymmetricLow
 ```
 
 **Note:** The `devDeviationThresholds` setting only applies when using KubeVirtRelieveAndMigrate or DevKubeVirtRelieveAndMigrate profiles. It has no effect when the profile falls back to LongLifecycle (OCP 5.10).
@@ -222,8 +228,13 @@ kubectl get machineconfig 99-worker-psi-karg -o jsonpath='{.spec.kernelArguments
 
 ```
 Pending → Drafting → ReviewRequired → InProgress → Completed
-                   ↘                 ↗
-                     (user changes action)
+                   ↘                 ↗                 ↓
+                     (user changes action)      Drifted (drift detected)
+                                                      ↓
+                                                  (manual retry or
+                                                   bypassOptimisticLock)
+                                                      ↓
+                                                  InProgress
 ```
 
 ### Error Handling
@@ -235,13 +246,46 @@ Pending → Drafting → ReviewRequired → InProgress → Completed
   - `FailurePolicy=Continue`: Mark item as failed, continue
 - **Partial completion**: End in `CompletedWithErrors`
 
+## Drift Detection & Remediation
+
+The operator provides comprehensive drift detection and remediation capabilities:
+
+### Drift Detection
+- **During InProgress**: Monitors completed items for drift while other items are still executing
+- **During Completed**: Periodically checks all items for configuration drift
+- **Transition to Drifted**: Automatically transitions to `phase: Drifted` when drift is detected
+
+### Drift Workflow
+**Default behavior (avoids fighting with other controllers):**
+1. Drift detected → Phase: `Drifted` → Controller stops applying changes
+2. Manual intervention required:
+   - Change `action: DryRun` to regenerate plan with current state
+   - Review the updated diff
+   - Change `action: Apply` to re-apply configuration
+
+**Aggressive remediation (continuous reconciliation):**
+- Set `spec.bypassOptimisticLock: true` to enable automatic drift correction
+- Controller will continuously re-apply configuration when drift is detected
+- Use with caution - may conflict with other controllers or manual changes
+
+### Condition Management
+The operator maintains standard Kubernetes conditions for monitoring:
+- `Drafting`: True when generating plan, False when plan generation complete
+- `InProgress`: True when applying configuration, False when not applying
+- `Drifted`: True when drift detected, False when configuration is in sync
+- `Completed`: True when plan execution succeeded
+
+Query for drifted configurations:
+```bash
+kubectl get virtplatformconfig -o json | jq '.items[] | select(.status.conditions[] | select(.type=="Drifted" and .status=="True"))'
+```
+
 ## Future Enhancements
 
-1. **Real Diff Generation**: Use strategic merge patch or JSON patch for accurate diffs
-2. **Drift Detection**: Implement periodic drift checking in `Completed` phase
-3. **Rollback**: Add rollback capability for failed applies
-4. **Webhooks**: Add validation webhooks for VirtPlatformConfig
-5. **More Profiles**: Implement additional profiles from the VEP
+1. **Rollback**: Add rollback capability for failed applies
+2. **Webhooks**: Add validation webhooks for VirtPlatformConfig
+3. **More Profiles**: Implement additional profiles from the VEP
+4. **Watch-based Drift Detection**: Implement managed object watches for immediate drift notifications
 
 ## References
 
