@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/yaml"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
 
 var (
@@ -54,7 +54,7 @@ var _ = BeforeSuite(func() {
 	Expect(integrationCfg).NotTo(BeNil())
 
 	scheme := runtime.NewScheme()
-	err = hcov1alpha1.AddToScheme(scheme)
+	err = advisorv1alpha1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Register core v1 scheme for Namespace operations
@@ -170,7 +170,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(deschedulerItem.TargetRef.APIVersion).To(Equal("operator.openshift.io/v1"))
 			Expect(deschedulerItem.TargetRef.Name).To(Equal("cluster"))
 			Expect(deschedulerItem.TargetRef.Namespace).To(Equal("openshift-kube-descheduler-operator"), "KubeDescheduler is namespaced")
-			Expect(deschedulerItem.State).To(Equal(hcov1alpha1.ItemStatePending))
+			Expect(deschedulerItem.State).To(Equal(advisorv1alpha1.ItemStatePending))
 		})
 
 		It("should create MachineConfig item with correct properties", func() {
@@ -183,7 +183,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem.TargetRef.APIVersion).To(Equal("machineconfiguration.openshift.io/v1"))
 			Expect(mcItem.TargetRef.Name).To(Equal("99-worker-psi-karg"))
 			Expect(mcItem.TargetRef.Namespace).To(BeEmpty(), "MachineConfig is cluster-scoped")
-			Expect(mcItem.State).To(Equal(hcov1alpha1.ItemStatePending))
+			Expect(mcItem.State).To(Equal(advisorv1alpha1.ItemStatePending))
 		})
 
 		It("should generate SSA-based unified diff for KubeDescheduler", func() {
@@ -363,7 +363,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 				Expect(item.TargetRef.Name).NotTo(BeEmpty(), "resource name should be set")
 				Expect(item.ImpactSeverity).NotTo(BeEmpty(), "impact severity should be set")
 				Expect(item.Diff).NotTo(BeEmpty(), "diff should be set")
-				Expect(item.State).To(Equal(hcov1alpha1.ItemStatePending), "state should be Pending")
+				Expect(item.State).To(Equal(advisorv1alpha1.ItemStatePending), "state should be Pending")
 				Expect(item.Message).NotTo(BeEmpty(), "message should be set")
 				Expect(item.ManagedFields).NotTo(BeEmpty(), "managed fields should be set")
 			}
@@ -766,7 +766,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2)) // KubeDescheduler + MachineConfig
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.VirtPlatformConfigItem
+			var mcItem *advisorv1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -826,7 +826,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2))
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.VirtPlatformConfigItem
+			var mcItem *advisorv1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -883,7 +883,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.VirtPlatformConfigItem
+			var mcItem *advisorv1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -939,7 +939,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.VirtPlatformConfigItem
+			var mcItem *advisorv1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]
@@ -965,7 +965,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2))
 
 			// Find the MachineConfig item
-			var mcItem *hcov1alpha1.VirtPlatformConfigItem
+			var mcItem *advisorv1alpha1.VirtPlatformConfigItem
 			for i := range items {
 				if items[i].TargetRef.Name == machineConfigName {
 					mcItem = &items[i]

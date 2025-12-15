@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
 
 var _ = Describe("VirtPlatformConfig Controller", func() {
@@ -40,18 +40,18 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 			Name: resourceName,
 			// No namespace - VirtPlatformConfig is cluster-scoped
 		}
-		configurationplan := &hcov1alpha1.VirtPlatformConfig{}
+		configurationplan := &advisorv1alpha1.VirtPlatformConfig{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind VirtPlatformConfig")
 			err := k8sClient.Get(ctx, typeNamespacedName, configurationplan)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &hcov1alpha1.VirtPlatformConfig{
+				resource := &advisorv1alpha1.VirtPlatformConfig{
 					ObjectMeta: metav1.ObjectMeta{
 						Name: resourceName,
 						// No namespace - VirtPlatformConfig is cluster-scoped
 					},
-					Spec: hcov1alpha1.VirtPlatformConfigSpec{
+					Spec: advisorv1alpha1.VirtPlatformConfigSpec{
 						Profile: resourceName, // Must match metadata.name per CEL validation
 					},
 				}
@@ -61,7 +61,7 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 
 		AfterEach(func() {
 			By("Cleanup the specific resource instance VirtPlatformConfig")
-			resource := &hcov1alpha1.VirtPlatformConfig{}
+			resource := &advisorv1alpha1.VirtPlatformConfig{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -86,7 +86,7 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 
 		AfterEach(func() {
 			// Clean up any resources that might have been created
-			resource := &hcov1alpha1.VirtPlatformConfig{}
+			resource := &advisorv1alpha1.VirtPlatformConfig{}
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: "mismatched-name"}, resource)
 			if err == nil {
 				_ = k8sClient.Delete(ctx, resource)
@@ -95,11 +95,11 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 
 		It("should reject VirtPlatformConfig when name does not match profile", func() {
 			By("attempting to create a VirtPlatformConfig with mismatched name and profile")
-			resource := &hcov1alpha1.VirtPlatformConfig{
+			resource := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "mismatched-name",
 				},
-				Spec: hcov1alpha1.VirtPlatformConfigSpec{
+				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
 					Profile: "different-profile",
 				},
 			}
@@ -112,11 +112,11 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 		It("should accept VirtPlatformConfig when name matches profile", func() {
 			By("creating a VirtPlatformConfig with matching name and profile")
 			const matchingName = "matching-profile"
-			resource := &hcov1alpha1.VirtPlatformConfig{
+			resource := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: matchingName,
 				},
-				Spec: hcov1alpha1.VirtPlatformConfigSpec{
+				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
 					Profile: matchingName,
 				},
 			}

@@ -6,7 +6,8 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 )
 
 // mockProfile is a simple mock implementation for testing.
@@ -18,12 +19,16 @@ func (m *mockProfile) GetName() string {
 	return m.name
 }
 
+func (m *mockProfile) GetPrerequisites() []discovery.Prerequisite {
+	return []discovery.Prerequisite{}
+}
+
 func (m *mockProfile) Validate(configOverrides map[string]string) error {
 	return nil
 }
 
-func (m *mockProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
-	return []hcov1alpha1.VirtPlatformConfigItem{}, nil
+func (m *mockProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
+	return []advisorv1alpha1.VirtPlatformConfigItem{}, nil
 }
 
 func TestRegistry_Register(t *testing.T) {
@@ -298,7 +303,7 @@ func TestExampleProfile_GeneratePlanItems(t *testing.T) {
 		if item.TargetRef.Kind == "" {
 			t.Error("Plan item has empty target kind")
 		}
-		if item.State != hcov1alpha1.ItemStatePending {
+		if item.State != advisorv1alpha1.ItemStatePending {
 			t.Errorf("Plan item state = %v, expected Pending", item.State)
 		}
 	}

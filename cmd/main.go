@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
@@ -36,8 +37,10 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/controller"
+	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,7 +53,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 
-	utilruntime.Must(hcov1alpha1.AddToScheme(scheme))
+	utilruntime.Must(advisorv1alpha1.AddToScheme(scheme))
 	// Note: Third-party types (KubeDescheduler, MachineConfig) are NOT added to the scheme
 	// We use unstructured objects to handle them dynamically, as they may not exist in all clusters
 	// +kubebuilder:scaffold:scheme
@@ -179,6 +182,43 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+
+	// Set up CRD Sentinel for dynamic discovery
+	crdSentinel := &controller.CRDSentinelReconciler{
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		MissingCRDs: make(map[string]bool),
+	}
+
+	// Check which CRDs are missing at startup and mark them
+	checker := discovery.NewCRDChecker(mgr.GetClient())
+	for _, profileName := range profiles.DefaultRegistry.List() {
+		profile, err := profiles.DefaultRegistry.Get(profileName)
+		if err != nil {
+			setupLog.Error(err, "failed to get profile", "profile", profileName)
+			continue
+		}
+
+		missing, err := checker.CheckPrerequisites(context.Background(), profile.GetPrerequisites())
+		if err != nil {
+			setupLog.Error(err, "failed to check prerequisites", "profile", profileName)
+			continue
+		}
+
+		for _, prereq := range missing {
+			crdName := checker.ConstructCRDName(prereq.GVK)
+			crdSentinel.MarkCRDMissing(crdName)
+			setupLog.Info("CRD not found at startup, will watch for installation",
+				"crd", crdName,
+				"kind", prereq.GVK.Kind,
+				"profile", profileName)
+		}
+	}
+
+	if err := crdSentinel.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CRDSentinel")
 		os.Exit(1)
 	}
 

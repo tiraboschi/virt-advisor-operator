@@ -8,7 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 )
 
@@ -88,13 +88,13 @@ func (b *PlanItemBuilder) WithMessage(message string) *PlanItemBuilder {
 // 2. Determines impact severity if not manually set (based on resource existence)
 // 3. Generates the diff using SSA dry-run (API server validation)
 // 4. Returns a complete VirtPlatformConfigItem
-func (b *PlanItemBuilder) Build() (hcov1alpha1.VirtPlatformConfigItem, error) {
+func (b *PlanItemBuilder) Build() (advisorv1alpha1.VirtPlatformConfigItem, error) {
 	// Validate required fields
 	if b.desired == nil {
-		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("desired resource not set (use ForResource)")
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("desired resource not set (use ForResource)")
 	}
 	if b.name == "" {
-		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("item name not set (use ForResource)")
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("item name not set (use ForResource)")
 	}
 
 	gvk := b.desired.GroupVersionKind()
@@ -107,7 +107,7 @@ func (b *PlanItemBuilder) Build() (hcov1alpha1.VirtPlatformConfigItem, error) {
 		if isNew {
 			b.impactSeverity = fmt.Sprintf("Medium - Creates new %s", gvk.Kind)
 		} else if err != nil {
-			return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to check if resource exists: %w", err)
+			return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to check if resource exists: %w", err)
 		} else {
 			b.impactSeverity = fmt.Sprintf("Low - Updates existing %s", gvk.Kind)
 		}
@@ -122,12 +122,12 @@ func (b *PlanItemBuilder) Build() (hcov1alpha1.VirtPlatformConfigItem, error) {
 	// This ensures we leverage API server validation, defaulting, CEL, and webhooks
 	diff, err := plan.GenerateSSADiff(b.ctx, b.client, b.desired, b.fieldManager)
 	if err != nil {
-		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to generate SSA diff: %w", err)
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to generate SSA diff: %w", err)
 	}
 
-	return hcov1alpha1.VirtPlatformConfigItem{
+	return advisorv1alpha1.VirtPlatformConfigItem{
 		Name: b.name,
-		TargetRef: hcov1alpha1.ObjectReference{
+		TargetRef: advisorv1alpha1.ObjectReference{
 			APIVersion: gvk.GroupVersion().String(),
 			Kind:       gvk.Kind,
 			Name:       b.desired.GetName(),
@@ -135,7 +135,7 @@ func (b *PlanItemBuilder) Build() (hcov1alpha1.VirtPlatformConfigItem, error) {
 		},
 		ImpactSeverity:     b.impactSeverity,
 		Diff:               diff,
-		State:              hcov1alpha1.ItemStatePending,
+		State:              advisorv1alpha1.ItemStatePending,
 		Message:            b.message,
 		ManagedFields:      b.managedFields,
 		LastTransitionTime: nil, // Set by controller

@@ -9,7 +9,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 )
 
@@ -84,6 +85,20 @@ func (p *LoadAwareRebalancingProfile) GetName() string {
 	return p.name
 }
 
+// GetPrerequisites returns the CRDs required by this profile
+func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisite {
+	return []discovery.Prerequisite{
+		{
+			GVK:         KubeDeschedulerGVK,
+			Description: "Please install the Descheduler Operator via OLM",
+		},
+		{
+			GVK:         MachineConfigGVK,
+			Description: "MachineConfig CRD is required for PSI metrics configuration (typically available on OpenShift)",
+		},
+	}
+}
+
 // Validate checks if the provided config overrides are valid
 func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string) error {
 	supportedKeys := map[string]bool{
@@ -102,7 +117,7 @@ func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string
 }
 
 // GeneratePlanItems creates the configuration items for this profile
-func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
 	// First, check if required CRDs exist
 	checker := plan.NewCRDChecker(c)
 	requiredCRDs := []string{kubeDeschedulerCRD}
@@ -127,7 +142,7 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
 		return nil, fmt.Errorf("required CRDs not found in cluster: %v (install them first)", missingCRDs)
 	}
 
-	var items []hcov1alpha1.VirtPlatformConfigItem
+	var items []advisorv1alpha1.VirtPlatformConfigItem
 
 	deschedulingInterval := int32(defaultDeschedulingInterval)
 	if val, ok := configOverrides["deschedulingIntervalSeconds"]; ok {
@@ -279,7 +294,7 @@ func (p *LoadAwareRebalancingProfile) buildProfilesList(ctx context.Context, c c
 }
 
 // generateDeschedulerItem creates a plan item for KubeDescheduler configuration
-func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Context, c client.Client, interval int32, configOverrides map[string]string) (hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Context, c client.Client, interval int32, configOverrides map[string]string) (advisorv1alpha1.VirtPlatformConfigItem, error) {
 	// Select the best available descheduler profile
 	profile := p.selectDeschedulerProfile(ctx, c)
 
@@ -315,7 +330,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	}
 
 	if err := unstructured.SetNestedMap(desired.Object, spec, "spec"); err != nil {
-		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
 	}
 
 	// Determine managed fields based on whether profileCustomizations is set
@@ -333,7 +348,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 }
 
 // generateMachineConfigItem creates a plan item for MachineConfig PSI enablement
-func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Context, c client.Client) (hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Context, c client.Client) (advisorv1alpha1.VirtPlatformConfigItem, error) {
 	mcName := "99-worker-psi-karg"
 
 	// Build the desired MachineConfig object
@@ -350,7 +365,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 	}
 
 	if err := unstructured.SetNestedMap(desired.Object, spec, "spec"); err != nil {
-		return hcov1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
 	}
 
 	// Determine impact severity based on effect-based validation

@@ -118,7 +118,7 @@ To generate accurate, human-readable diffs that respect Kubernetes defaults, web
 
 **The Generation Algorithm:**
 1.  **Construct Intent:** The Operator constructs the desired `ApplyConfiguration` based on the selected `profile`.
-2.  **Dry-Run Apply:** It sends a PATCH request with `DryRun: ["All"]` and `FieldManager: "hco-governance"`.
+2.  **Dry-Run Apply:** It sends a PATCH request with `DryRun: ["All"]` and `FieldManager: "virt-advisor-operator"`.
 3.  **Sanitize:** It retrieves the Live Object and the Result Object, stripping noise (timestamps, `managedFields`).
 4.  **Compute Diff:** It calculates the Unified Diff between `Sanitized(Live)` and `Sanitized(Result)`.
 

@@ -17,7 +17,7 @@ This guide explains how to create new configuration profiles for the virt-adviso
 
 ```go
 // DO NOT DO THIS - Bypasses API server validation!
-func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
     diff := fmt.Sprintf(`--- my-resource
 +++ my-resource
 @@ -1,1 +1,1 @@
@@ -26,7 +26,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
 +  newValue: 2
 `)
 
-    return []hcov1alpha1.VirtPlatformConfigItem{{
+    return []advisorv1alpha1.VirtPlatformConfigItem{{
         Name:       "my-item",
         Diff:       diff,  // ❌ Manual string - NO validation!
         TargetRef:  /* ... */,
@@ -44,7 +44,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
 ### ✅ CORRECT - Using PlanItemBuilder
 
 ```go
-func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
     // 1. Build the desired object
     desired := plan.CreateUnstructured(MyGVK, "my-resource", "")
 
@@ -67,7 +67,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
         return nil, err
     }
 
-    return []hcov1alpha1.VirtPlatformConfigItem{item}, nil
+    return []advisorv1alpha1.VirtPlatformConfigItem{item}, nil
 }
 ```
 
@@ -118,7 +118,7 @@ import (
     "k8s.io/apimachinery/pkg/runtime/schema"
     "sigs.k8s.io/controller-runtime/pkg/client"
 
-    hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+    advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
     "github.com/kubevirt/virt-advisor-operator/internal/plan"
 )
 
@@ -147,7 +147,7 @@ func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string
     return nil
 }
 
-func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
     // Select the best available descheduler profile based on CRD schema
     profile := p.selectDeschedulerProfile(ctx, c)  // Returns KubeVirtRelieveAndMigrate, DevKubeVirtRelieveAndMigrate, or LongLifecycle
 
@@ -197,7 +197,7 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
         return nil, err
     }
 
-    return []hcov1alpha1.VirtPlatformConfigItem{item}, nil
+    return []advisorv1alpha1.VirtPlatformConfigItem{item}, nil
 }
 
 func init() {
@@ -265,7 +265,7 @@ func TestMyProfile(t *testing.T) {
 
 ```go
 // WRONG - Bypasses SSA validation
-return []hcov1alpha1.VirtPlatformConfigItem{{
+return []advisorv1alpha1.VirtPlatformConfigItem{{
     Name: "my-item",
     Diff: "manual diff string",
     // ...
@@ -277,7 +277,7 @@ return []hcov1alpha1.VirtPlatformConfigItem{{
 ```go
 // WRONG - Use builder instead
 diff, err := plan.GenerateSSADiff(ctx, c, desired, "field-manager")
-item := hcov1alpha1.VirtPlatformConfigItem{
+item := advisorv1alpha1.VirtPlatformConfigItem{
     Diff: diff,
     // ...
 }

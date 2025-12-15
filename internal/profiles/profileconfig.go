@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"strconv"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
 
 // OptionsToMap converts typed ProfileOptions to map[string]string for profiles that still use map-based config.
 // This is a temporary compatibility layer - profiles should eventually accept typed configs directly.
-func OptionsToMap(profileName string, options *hcov1alpha1.ProfileOptions) map[string]string {
+func OptionsToMap(profileName string, options *advisorv1alpha1.ProfileOptions) map[string]string {
 	if options == nil {
 		return map[string]string{}
 	}
@@ -26,7 +26,7 @@ func OptionsToMap(profileName string, options *hcov1alpha1.ProfileOptions) map[s
 }
 
 // loadAwareToMap converts LoadAwareConfig to map format.
-func loadAwareToMap(config *hcov1alpha1.LoadAwareConfig) map[string]string {
+func loadAwareToMap(config *advisorv1alpha1.LoadAwareConfig) map[string]string {
 	m := make(map[string]string)
 
 	if config.DeschedulingIntervalSeconds != nil {
@@ -72,7 +72,7 @@ func GetStringConfig(configMap map[string]string, key string, defaultValue strin
 
 // ValidateOptions ensures the ProfileOptions matches the selected profile.
 // This is a runtime check in addition to CEL validation.
-func ValidateOptions(profileName string, options *hcov1alpha1.ProfileOptions) error {
+func ValidateOptions(profileName string, options *advisorv1alpha1.ProfileOptions) error {
 	if options == nil {
 		return nil // Optional field
 	}

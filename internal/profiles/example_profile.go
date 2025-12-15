@@ -6,7 +6,8 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 )
 
 // ExampleProfile is a simple demonstration profile.
@@ -27,6 +28,12 @@ func (p *ExampleProfile) GetName() string {
 	return p.name
 }
 
+// GetPrerequisites returns the CRDs required by this profile.
+// Example profile has no prerequisites as it's just a demonstration.
+func (p *ExampleProfile) GetPrerequisites() []discovery.Prerequisite {
+	return []discovery.Prerequisite{}
+}
+
 // Validate checks if the provided config overrides are valid.
 func (p *ExampleProfile) Validate(configOverrides map[string]string) error {
 	// Example: validate supported overrides
@@ -45,24 +52,24 @@ func (p *ExampleProfile) Validate(configOverrides map[string]string) error {
 }
 
 // GeneratePlanItems creates the configuration items for this profile.
-func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
 	// For now, return a simple example item
 	// In a real implementation, this would:
 	// 1. Read current cluster state
 	// 2. Determine what changes are needed
 	// 3. Generate plan items with diffs
 
-	items := []hcov1alpha1.VirtPlatformConfigItem{
+	items := []advisorv1alpha1.VirtPlatformConfigItem{
 		{
 			Name: "configure-example-component",
-			TargetRef: hcov1alpha1.ObjectReference{
+			TargetRef: advisorv1alpha1.ObjectReference{
 				APIVersion: "apps/v1",
 				Kind:       "Deployment",
 				Name:       "example-component",
 				Namespace:  "default",
 			},
 			ImpactSeverity: "Low",
-			State:          hcov1alpha1.ItemStatePending,
+			State:          advisorv1alpha1.ItemStatePending,
 			Message:        "Waiting to apply configuration",
 		},
 	}

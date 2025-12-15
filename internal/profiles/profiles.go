@@ -6,7 +6,8 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	hcov1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 )
 
 // Profile defines the interface for a configuration profile.
@@ -19,7 +20,7 @@ import (
 //
 // Example:
 //
-//	func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error) {
+//	func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, overrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
 //	    desired := plan.CreateUnstructured(MyGVK, "my-resource", "")
 //	    // ... configure desired object ...
 //
@@ -30,11 +31,15 @@ import (
 //	    if err != nil {
 //	        return nil, err
 //	    }
-//	    return []hcov1alpha1.VirtPlatformConfigItem{item}, nil
+//	    return []advisorv1alpha1.VirtPlatformConfigItem{item}, nil
 //	}
 type Profile interface {
 	// GetName returns the unique name of this profile.
 	GetName() string
+
+	// GetPrerequisites returns the list of CRDs required by this profile.
+	// The controller will check these before generating the plan.
+	GetPrerequisites() []discovery.Prerequisite
 
 	// Validate checks if the provided config overrides are valid for this profile.
 	// Returns an error if any override is invalid or unsupported.
@@ -45,7 +50,7 @@ type Profile interface {
 	//
 	// CRITICAL: You MUST use PlanItemBuilder to construct items, not manually.
 	// See the Profile interface documentation for usage example.
-	GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]hcov1alpha1.VirtPlatformConfigItem, error)
+	GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error)
 }
 
 // Registry manages the collection of available profiles.
