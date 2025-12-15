@@ -32,8 +32,8 @@ spec:
     # Only this field should be set when profile=load-aware-rebalancing
     loadAware:
       # How often to run descheduling (in seconds)
-      # Minimum: 60 (1 minute), Maximum: 86400 (24 hours), Default: 1800 (30 minutes)
-      deschedulingIntervalSeconds: 1800
+      # Minimum: 60 (1 minute), Maximum: 86400 (24 hours), Default: 60 (1 minute)
+      deschedulingIntervalSeconds: 120
 
       # Whether to enable PSI metrics via MachineConfig
       # When true, creates a MachineConfig with psi=1 kernel argument

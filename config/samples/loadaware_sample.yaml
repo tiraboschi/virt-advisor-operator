@@ -27,6 +27,6 @@ spec:
   # This field is optional - if omitted, profile defaults will be used
   # options:
   #   loadAware:
-  #     deschedulingIntervalSeconds: 1800  # Integer (60-86400), default: 1800
-  #     enablePSIMetrics: true              # Boolean, default: true
+  #     deschedulingIntervalSeconds: 120  # Integer (60-86400), default: 60
+  #     enablePSIMetrics: true             # Boolean, default: true
   #     devDeviationThresholds: AsymmetricLow  # Enum: Low|AsymmetricLow|High

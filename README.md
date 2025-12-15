@@ -63,6 +63,14 @@ kubectl delete -f config/samples/loadaware_sample.yaml
 make kind-delete  # Delete the Kind cluster
 ```
 
+**For a comprehensive testing guide**, see [Testing on Kind](docs/TESTING_ON_KIND.md) which covers:
+- Step-by-step testing workflow with detailed explanations
+- Testing custom configuration options
+- Testing prerequisite checks and CRD sentinel behavior
+- Testing drift detection
+- Troubleshooting common issues
+
+
 ## Available Profiles
 
 ### example-profile
@@ -83,7 +91,7 @@ Implements the VEP's load-aware rebalancing capability by configuring:
 - Removes other conflicting profiles
 
 **Supported Config Overrides:**
-- `deschedulingIntervalSeconds`: How often to run descheduling (default: 1800 = 30 minutes)
+- `deschedulingIntervalSeconds`: How often to run descheduling (default: 60 = 1 minute)
 - `enablePSIMetrics`: Whether to enable PSI kernel metrics (default: true)
 - `devDeviationThresholds`: Deviation threshold for load balancing (default: AsymmetricLow)
   - Valid values: Low, Medium, High, AsymmetricLow, AsymmetricMedium, AsymmetricHigh
