@@ -133,19 +133,50 @@ func IsCertManagerCRDsInstalled() bool {
 	return false
 }
 
-// LoadImageToKindClusterWithName loads a local docker image to the kind cluster
+// LoadImageToKindClusterWithName loads a local container image to the kind cluster.
+// This function works with both Docker and Podman by saving the image to a tarball
+// and loading it into Kind from the archive.
 func LoadImageToKindClusterWithName(name string) error {
 	cluster := defaultKindCluster
 	if v, ok := os.LookupEnv("KIND_CLUSTER"); ok {
 		cluster = v
 	}
-	kindOptions := []string{"load", "docker-image", name, "--name", cluster}
 	kindBinary := defaultKindBinary
 	if v, ok := os.LookupEnv("KIND"); ok {
 		kindBinary = v
 	}
+
+	// Determine the container tool (docker or podman)
+	containerTool := "docker"
+	if v, ok := os.LookupEnv("CONTAINER_TOOL"); ok {
+		containerTool = v
+	} else {
+		// Auto-detect: prefer podman over docker if available
+		if _, err := exec.LookPath("podman"); err == nil {
+			containerTool = "podman"
+		}
+	}
+
+	// Save the image to a temporary tarball
+	tmpFile, err := os.CreateTemp("", "kind-image-*.tar")
+	if err != nil {
+		return fmt.Errorf("failed to create temporary file: %w", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	// Save the image using the container tool
+	_, _ = fmt.Fprintf(GinkgoWriter, "Saving image %s to tarball using %s...\n", name, containerTool)
+	saveCmd := exec.Command(containerTool, "save", "-o", tmpFile.Name(), name)
+	if _, err := Run(saveCmd); err != nil {
+		return fmt.Errorf("failed to save image to tarball: %w", err)
+	}
+
+	// Load the tarball into Kind
+	_, _ = fmt.Fprintf(GinkgoWriter, "Loading image tarball into Kind cluster %s...\n", cluster)
+	kindOptions := []string{"load", "image-archive", tmpFile.Name(), "--name", cluster}
 	cmd := exec.Command(kindBinary, kindOptions...)
-	_, err := Run(cmd)
+	_, err = Run(cmd)
 	return err
 }
 
