@@ -25,14 +25,17 @@ import (
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
 
+// validationTestCase represents a test case for validation testing
+type validationTestCase struct {
+	name        string
+	item        *advisorv1alpha1.VirtPlatformConfigItem
+	expectError bool
+	errorMsg    string
+}
+
 // TestExecuteItem_Validation tests the validation logic in ExecuteItem
 func TestExecuteItem_Validation(t *testing.T) {
-	tests := []struct {
-		name        string
-		item        *advisorv1alpha1.VirtPlatformConfigItem
-		expectError bool
-		errorMsg    string
-	}{
+	tests := []validationTestCase{
 		{
 			name: "Missing DesiredState",
 			item: &advisorv1alpha1.VirtPlatformConfigItem{
@@ -131,55 +134,81 @@ func TestExecuteItem_Validation(t *testing.T) {
 			// We can't actually execute without a real client, but we can test validation
 			// by checking if the error occurs during unmarshaling/validation
 
-			// Validate desired state can be unmarshaled
-			if tt.item.DesiredState != nil {
-				var obj map[string]interface{}
-				err := json.Unmarshal(tt.item.DesiredState.Raw, &obj)
-
-				if tt.expectError && tt.errorMsg == "failed to unmarshal desired state" {
-					if err == nil {
-						t.Error("Expected unmarshal error but got none")
-					}
-					return
-				}
-
-				if err != nil && !tt.expectError {
-					t.Errorf("Unexpected unmarshal error: %v", err)
-					return
-				}
+			// Check for missing DesiredState
+			if validateMissingDesiredState(t, tt) {
+				return
 			}
 
-			// For missing DesiredState test
-			if tt.item.DesiredState == nil && tt.expectError {
-				if tt.errorMsg != "missing desired state" {
-					t.Errorf("Expected different error message")
-				}
+			// Validate desired state can be unmarshaled
+			if validateUnmarshal(t, tt) {
 				return
 			}
 
 			// For missing required fields tests, check the unmarshaled object
-			if tt.item.DesiredState != nil && tt.expectError && tt.errorMsg == "missing required fields" {
-				var objMap map[string]interface{}
-				_ = json.Unmarshal(tt.item.DesiredState.Raw, &objMap)
-
-				kind, _ := objMap["kind"].(string)
-				apiVersion, _ := objMap["apiVersion"].(string)
-
-				metadata, _ := objMap["metadata"].(map[string]interface{})
-				var name string
-				if metadata != nil {
-					name, _ = metadata["name"].(string)
-				}
-
-				if kind == "" || apiVersion == "" || name == "" {
-					// This is expected - validation should catch this
-					return
-				}
-
-				t.Error("Expected validation to fail for missing required fields")
-			}
+			validateRequiredFields(t, tt)
 		})
 	}
+}
+
+// validateMissingDesiredState checks if the test expects a missing DesiredState error
+func validateMissingDesiredState(t *testing.T, tt validationTestCase) bool {
+	if tt.item.DesiredState == nil && tt.expectError {
+		if tt.errorMsg != "missing desired state" {
+			t.Errorf("Expected different error message")
+		}
+		return true
+	}
+	return false
+}
+
+// validateUnmarshal checks if the desired state can be unmarshaled properly
+func validateUnmarshal(t *testing.T, tt validationTestCase) bool {
+	if tt.item.DesiredState == nil {
+		return false
+	}
+
+	var obj map[string]interface{}
+	err := json.Unmarshal(tt.item.DesiredState.Raw, &obj)
+
+	if tt.expectError && tt.errorMsg == "failed to unmarshal desired state" {
+		if err == nil {
+			t.Error("Expected unmarshal error but got none")
+		}
+		return true
+	}
+
+	if err != nil && !tt.expectError {
+		t.Errorf("Unexpected unmarshal error: %v", err)
+		return true
+	}
+
+	return false
+}
+
+// validateRequiredFields checks if the unmarshaled object has all required fields
+func validateRequiredFields(t *testing.T, tt validationTestCase) {
+	if tt.item.DesiredState == nil || !tt.expectError || tt.errorMsg != "missing required fields" {
+		return
+	}
+
+	var objMap map[string]interface{}
+	_ = json.Unmarshal(tt.item.DesiredState.Raw, &objMap)
+
+	kind, _ := objMap["kind"].(string)
+	apiVersion, _ := objMap["apiVersion"].(string)
+
+	metadata, _ := objMap["metadata"].(map[string]interface{})
+	var name string
+	if metadata != nil {
+		name, _ = metadata["name"].(string)
+	}
+
+	if kind == "" || apiVersion == "" || name == "" {
+		// This is expected - validation should catch this
+		return
+	}
+
+	t.Error("Expected validation to fail for missing required fields")
 }
 
 // Helper function to marshal a map to RawExtension for testing

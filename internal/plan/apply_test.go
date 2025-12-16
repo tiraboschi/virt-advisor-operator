@@ -167,10 +167,7 @@ func TestConvertToUnstructured_PreservesData(t *testing.T) {
 	}
 
 	// Verify data is accessible
-	data, found, err := unstructuredNestedStringMap(unstructured.Object, "data")
-	if err != nil {
-		t.Errorf("Error accessing data: %v", err)
-	}
+	data, found := unstructuredNestedStringMap(unstructured.Object, "data")
 	if !found {
 		t.Error("Data field not found")
 	}
@@ -180,15 +177,15 @@ func TestConvertToUnstructured_PreservesData(t *testing.T) {
 }
 
 // Helper function to extract nested string map from unstructured
-func unstructuredNestedStringMap(obj map[string]interface{}, field string) (map[string]string, bool, error) {
+func unstructuredNestedStringMap(obj map[string]interface{}, field string) (map[string]string, bool) {
 	val, found := obj[field]
 	if !found {
-		return nil, false, nil
+		return nil, false
 	}
 
 	mapVal, ok := val.(map[string]interface{})
 	if !ok {
-		return nil, false, nil
+		return nil, false
 	}
 
 	result := make(map[string]string)
@@ -199,5 +196,5 @@ func unstructuredNestedStringMap(obj map[string]interface{}, field string) (map[
 		}
 	}
 
-	return result, true, nil
+	return result, true
 }
