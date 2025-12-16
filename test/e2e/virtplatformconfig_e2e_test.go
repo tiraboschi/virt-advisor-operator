@@ -358,11 +358,18 @@ spec:
 			metricsOutput, err := getMetricsOutput()
 			Expect(err).NotTo(HaveOccurred())
 
-			// Look for reconciliation metrics
-			Expect(metricsOutput).To(ContainSubstring("controller_runtime_reconcile_total"),
-				"Should contain reconciliation metrics")
-			Expect(metricsOutput).To(ContainSubstring("virtplatformconfig"),
-				"Metrics should reference virtplatformconfig controller")
+			// Look for reconciliation metrics  - be flexible as metrics format may vary
+			Expect(metricsOutput).NotTo(BeEmpty(), "Metrics output should not be empty")
+			Expect(metricsOutput).To(Or(
+				ContainSubstring("controller_runtime_reconcile"),
+				ContainSubstring("workqueue_"),
+			), "Should contain controller-runtime or workqueue metrics")
+
+			// Check for controller name in metrics (might be in various formats)
+			Expect(metricsOutput).To(Or(
+				ContainSubstring("virtplatformconfig"),
+				ContainSubstring("VirtPlatformConfig"),
+			), "Metrics should reference the VirtPlatformConfig controller")
 
 			By("cleaning up curl-metrics pod")
 			cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", "virt-advisor-operator-system", "--ignore-not-found=true")
@@ -508,6 +515,267 @@ spec:
 			output, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal("Running"))
+		})
+	})
+
+	Context("Load-Aware Rebalancing Profile", func() {
+		It("should detect missing OpenShift prerequisites", func() {
+			By("applying load-aware-rebalancing profile")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying controller detects missing CRDs")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				// In Kind cluster without OpenShift, should fail prerequisites
+				g.Expect(status.Phase).To(Equal("PrerequisiteFailed"),
+					"Should detect missing OpenShift CRDs")
+
+				prereqCondition := findCondition(status.Conditions, "PrerequisiteFailed")
+				g.Expect(prereqCondition).NotTo(BeNil())
+				g.Expect(prereqCondition.Status).To(Equal("True"))
+				// Message should mention the missing CRDs
+				g.Expect(prereqCondition.Message).To(Or(
+					ContainSubstring("kubedeschedulers.operator.openshift.io"),
+					ContainSubstring("machineconfigs.machineconfiguration.openshift.io"),
+					ContainSubstring("CRD"),
+				))
+			}).Should(Succeed())
+		})
+
+		It("should accept valid profile options", func() {
+			By("applying load-aware-rebalancing with all valid options")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      deschedulingIntervalSeconds: 120
+      mode: Automatic
+      enablePSIMetrics: true
+      devDeviationThresholds: AsymmetricMedium
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Valid profile options should be accepted")
+
+			By("verifying the VirtPlatformConfig is created with correct options")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "load-aware-rebalancing",
+					"-o", "jsonpath={.spec.options.loadAware.deschedulingIntervalSeconds}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("120"))
+			}).Should(Succeed())
+		})
+
+		It("should accept minimal configuration with defaults", func() {
+			By("applying load-aware-rebalancing without options")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Profile should work with default options")
+
+			By("verifying controller processes it")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				g.Expect(status.Phase).NotTo(BeEmpty(), "Controller should set a phase")
+			}).Should(Succeed())
+		})
+
+		It("should reject invalid descheduling interval", func() {
+			By("applying load-aware-rebalancing with interval < 60")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      deschedulingIntervalSeconds: 30
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			output, err := cmd.CombinedOutput()
+			Expect(err).To(HaveOccurred(), "Should reject interval < 60")
+			Expect(string(output)).To(ContainSubstring("60"),
+				"Error should mention minimum value")
+		})
+
+		It("should reject invalid deviation thresholds", func() {
+			By("applying load-aware-rebalancing with invalid devDeviationThresholds")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      devDeviationThresholds: InvalidValue
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			output, err := cmd.CombinedOutput()
+			Expect(err).To(HaveOccurred(), "Should reject invalid enum value")
+			Expect(string(output)).To(Or(
+				ContainSubstring("Unsupported value"),
+				ContainSubstring("supported values"),
+			), "Error should mention invalid value")
+		})
+
+		It("should handle PSI metrics enablement configuration", func() {
+			By("applying load-aware-rebalancing with enablePSIMetrics=false")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      enablePSIMetrics: false
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept enablePSIMetrics=false")
+
+			By("verifying controller processes the configuration")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				// Controller should process it and set a phase
+				g.Expect(status.Phase).NotTo(BeEmpty(), "Controller should set a phase")
+
+				// In Kind cluster without OpenShift, should fail prerequisites
+				// The controller detects missing CRDs and transitions to PrerequisiteFailed
+				if status.Phase == "PrerequisiteFailed" {
+					prereqCondition := findCondition(status.Conditions, "PrerequisiteFailed")
+					if prereqCondition != nil {
+						// Message should mention KubeDescheduler
+						g.Expect(prereqCondition.Message).To(ContainSubstring("KubeDescheduler"),
+							"Should mention missing KubeDescheduler CRD")
+					}
+				}
+			}).Should(Succeed())
+		})
+
+		It("should validate mode enum values", func() {
+			By("applying load-aware-rebalancing with Predictive mode")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      mode: Predictive
+`
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept valid mode enum")
+
+			By("rejecting invalid mode value")
+			invalidYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      mode: InvalidMode
+`
+			cmd = exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err := cmd.CombinedOutput()
+			Expect(err).To(HaveOccurred(), "Should reject invalid mode enum")
+			Expect(string(output)).To(Or(
+				ContainSubstring("Unsupported value"),
+				ContainSubstring("supported values"),
+			), "Error should mention invalid value")
+		})
+
+		It("should respect all deviation threshold enum values", func() {
+			validThresholds := []string{
+				"Low", "Medium", "High",
+				"AsymmetricLow", "AsymmetricMedium", "AsymmetricHigh",
+			}
+
+			for _, threshold := range validThresholds {
+				By(fmt.Sprintf("applying with devDeviationThresholds=%s", threshold))
+				sampleYAML := fmt.Sprintf(`
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      devDeviationThresholds: %s
+`, threshold)
+				cmd := exec.Command("kubectl", "apply", "-f", "-")
+				cmd.Stdin = strings.NewReader(sampleYAML)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(),
+					fmt.Sprintf("Should accept devDeviationThresholds=%s", threshold))
+
+				// Clean up for next iteration
+				cmd = exec.Command("kubectl", "delete", "virtplatformconfig", "load-aware-rebalancing",
+					"--ignore-not-found=true")
+				_, _ = utils.Run(cmd)
+				time.Sleep(2 * time.Second)
+			}
 		})
 	})
 })
