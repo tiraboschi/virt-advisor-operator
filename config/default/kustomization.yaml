@@ -1,5 +1,6 @@
 # Adds namespace to all resources.
-namespace: virt-advisor-operator-system
+# Using openshift-cnv which is the standard namespace for KubeVirt on OpenShift
+namespace: openshift-cnv
 
 # Value of this field is prepended to the
 # names of all resources, e.g. a deployment named

@@ -36,6 +36,22 @@ func (m *mockProfile) GeneratePlanItems(ctx context.Context, c client.Client, co
 	return []advisorv1alpha1.VirtPlatformConfigItem{}, nil
 }
 
+func (m *mockProfile) GetDescription() string {
+	return "Mock profile for testing"
+}
+
+func (m *mockProfile) GetCategory() string {
+	return "test"
+}
+
+func (m *mockProfile) GetImpactSummary() string {
+	return "None - Testing only"
+}
+
+func (m *mockProfile) IsAdvertisable() bool {
+	return false
+}
+
 func TestRegistry_Register(t *testing.T) {
 	tests := []struct {
 		name        string

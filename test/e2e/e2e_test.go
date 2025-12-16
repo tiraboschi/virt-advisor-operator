@@ -34,7 +34,7 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "virt-advisor-operator-system"
+const namespace = "openshift-cnv"
 
 // serviceAccountName created for the project
 const serviceAccountName = "virt-advisor-operator-controller-manager"

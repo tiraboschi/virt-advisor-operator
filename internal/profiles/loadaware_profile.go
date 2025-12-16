@@ -412,6 +412,26 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 		Build()
 }
 
+// GetDescription returns a human-readable description of this profile
+func (p *LoadAwareRebalancingProfile) GetDescription() string {
+	return "Enables load-aware VM rebalancing and PSI metrics for intelligent scheduling"
+}
+
+// GetCategory returns the category this profile belongs to
+func (p *LoadAwareRebalancingProfile) GetCategory() string {
+	return "scheduling"
+}
+
+// GetImpactSummary returns a summary of the impact of enabling this profile
+func (p *LoadAwareRebalancingProfile) GetImpactSummary() string {
+	return "Medium - May require node reboots if PSI metrics are enabled"
+}
+
+// IsAdvertisable returns true since this is a production profile
+func (p *LoadAwareRebalancingProfile) IsAdvertisable() bool {
+	return true
+}
+
 func init() {
 	// Register this profile in the default registry
 	if err := DefaultRegistry.Register(NewLoadAwareRebalancingProfile()); err != nil {

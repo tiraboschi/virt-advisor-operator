@@ -61,6 +61,7 @@ spec:
                 enum:
                 - DryRun
                 - Apply
+                - Ignore
                 type: string
               bypassOptimisticLock:
                 default: false
@@ -383,6 +384,7 @@ spec:
                 - CompletedWithErrors
                 - Failed
                 - Drifted
+                - Ignored
                 type: string
               sourceSnapshotHash:
                 description: |-

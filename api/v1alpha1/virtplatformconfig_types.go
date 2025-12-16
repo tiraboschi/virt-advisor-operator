@@ -21,7 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// +kubebuilder:validation:Enum=DryRun;Apply
+// +kubebuilder:validation:Enum=DryRun;Apply;Ignore
 // PlanAction defines the workflow step for the controller.
 type PlanAction string
 
@@ -31,6 +31,14 @@ const (
 
 	// PlanActionApply executes the plan if prerequisites are met.
 	PlanActionApply PlanAction = "Apply"
+
+	// PlanActionIgnore tells the controller to completely ignore this config.
+	// No planning, no drift detection, no metrics - the resource is effectively paused.
+	// IMPORTANT: This does NOT rollback or undo any changes previously applied by this profile.
+	// Resources that were modified when action was "Apply" remain in their current state.
+	// The cluster admin is now fully responsible for managing those resources manually.
+	// Use this to hand over management control without deleting the VirtPlatformConfig object.
+	PlanActionIgnore PlanAction = "Ignore"
 )
 
 // +kubebuilder:validation:Enum=Abort;Continue
@@ -144,7 +152,7 @@ type LoadAwareConfig struct {
 	DevDeviationThresholds *string `json:"devDeviationThresholds,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;Failed;Drifted
+// +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;Failed;Drifted;Ignored
 // PlanPhase summarizes the high-level state of the plan.
 type PlanPhase string
 
@@ -158,6 +166,7 @@ const (
 	PlanPhaseCompletedWithErrors PlanPhase = "CompletedWithErrors"
 	PlanPhaseFailed              PlanPhase = "Failed"
 	PlanPhaseDrifted             PlanPhase = "Drifted"
+	PlanPhaseIgnored             PlanPhase = "Ignored"
 )
 
 // +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed

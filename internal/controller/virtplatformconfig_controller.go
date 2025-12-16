@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -57,6 +58,7 @@ const (
 	ConditionTypeReviewReq    = "ReviewRequired"
 	ConditionTypePrereqFail   = "PrerequisiteFailed"
 	ConditionTypeCompletedErr = "CompletedWithErrors"
+	ConditionTypeIgnored      = "Ignored"
 )
 
 // Condition reasons
@@ -74,6 +76,8 @@ const (
 	ReasonFailed               = "Failed"
 	ReasonCompletedWithErrors  = "CompletedWithErrors"
 	ReasonPrerequisitesFailed  = "PrerequisitesFailed"
+	ReasonIgnored              = "Ignored"
+	ReasonNotIgnored           = "NotIgnored"
 )
 
 // Condition messages
@@ -98,6 +102,8 @@ const (
 	MessageCompletedPrereqFailed     = "Required CRDs not installed"
 	MessageNoDrift                   = "Configuration is in sync with desired state"
 	MessageDriftDetected             = "Configuration has drifted from desired state"
+	MessageIgnored                   = "Configuration is ignored - no management actions will be performed. Resources remain in their current state and are now under manual control. Change action to 'DryRun' or 'Apply' to resume operator management."
+	MessageNotIgnored                = "Configuration is being managed"
 )
 
 // VirtPlatformConfigReconciler reconciles a VirtPlatformConfig object
@@ -125,7 +131,17 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	configPlan := &advisorv1alpha1.VirtPlatformConfig{}
 	if err := r.Get(ctx, req.NamespacedName, configPlan); err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("VirtPlatformConfig resource not found, ignoring")
+			logger.Info("VirtPlatformConfig resource not found", "name", req.Name)
+
+			// Check if this was an advertisable profile that should be recreated
+			if r.shouldRecreateAdvertisedProfile(req.Name) {
+				logger.Info("Recreating deleted advertised profile", "profile", req.Name)
+				if _, err := r.createAdvertisedProfile(ctx, r.Client, req.Name, logger); err != nil {
+					logger.Error(err, "Failed to recreate advertised profile", "profile", req.Name)
+					// Don't return error - this is a best-effort operation
+				}
+			}
+
 			return ctrl.Result{}, nil
 		}
 		logger.Error(err, "Failed to get VirtPlatformConfig")
@@ -136,6 +152,28 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		"profile", configPlan.Spec.Profile,
 		"action", configPlan.Spec.Action,
 		"phase", configPlan.Status.Phase)
+
+	// Handle Ignore action: skip all management operations
+	// IMPORTANT: Ignore does NOT rollback or undo changes previously applied by this profile.
+	// Resources remain in their current state, and the cluster admin assumes manual control.
+	// We simply stop all reconciliation (no drift detection, no plan generation, no apply).
+	if configPlan.Spec.Action == advisorv1alpha1.PlanActionIgnore {
+		if configPlan.Status.Phase != advisorv1alpha1.PlanPhaseIgnored {
+			logger.Info("Action is Ignore, transitioning to Ignored phase")
+			return ctrl.Result{}, r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseIgnored,
+				"Configuration ignored by administrator")
+		}
+		// Already in Ignored phase, nothing to do
+		logger.V(1).Info("Configuration is ignored, skipping reconciliation")
+		return ctrl.Result{}, nil
+	}
+
+	// If we were in Ignored phase but action changed, reset to Pending to regenerate plan
+	if configPlan.Status.Phase == advisorv1alpha1.PlanPhaseIgnored {
+		logger.Info("Action changed from Ignore, resetting to Pending to regenerate plan")
+		return ctrl.Result{}, r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending,
+			"Action changed from Ignore, regenerating plan")
+	}
 
 	// Handle the reconciliation based on current phase
 	var err error
@@ -840,11 +878,17 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 
 	// Manage phase-related conditions based on phase transitions
 	switch newPhase {
+	case advisorv1alpha1.PlanPhasePending:
+		// Pending phase - typically after exiting Ignored or resetting
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+
 	case advisorv1alpha1.PlanPhaseDrafting:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionTrue, ReasonDrafting, MessageDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
 
 	case advisorv1alpha1.PlanPhaseReviewRequired:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedNotYetApplied)
@@ -852,35 +896,48 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionTrue, ReasonReviewRequired, MessageReviewRequired)
 
 	case advisorv1alpha1.PlanPhaseInProgress:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionTrue, ReasonInProgress, MessageInProgress)
 
 	case advisorv1alpha1.PlanPhaseCompleted:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompleted)
 		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionTrue, ReasonCompleted, MessageCompletedSuccess)
 
 	case advisorv1alpha1.PlanPhaseDrifted:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressDrifted)
 		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionTrue, ReasonDriftDetected, MessageDriftDetected)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonConfigurationDrifted, MessageCompletedDrifted)
 
 	case advisorv1alpha1.PlanPhaseCompletedWithErrors:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompletedErr)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
 
 	case advisorv1alpha1.PlanPhaseFailed:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingFailed)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressFailed)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonFailed, MessageCompletedFailed)
 
 	case advisorv1alpha1.PlanPhasePrerequisiteFailed:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingPrereqFail)
 		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressPrereqFail)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonPrerequisitesFailed, MessageCompletedPrereqFailed)
+
+	case advisorv1alpha1.PlanPhaseIgnored:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionTrue, ReasonIgnored, MessageIgnored)
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 	}
 
 	return r.Status().Update(ctx, configPlan)
@@ -1095,6 +1152,120 @@ func (r *VirtPlatformConfigReconciler) enqueueManagedResourceOwners() handler.Ev
 	})
 }
 
+// shouldRecreateAdvertisedProfile checks if a deleted VirtPlatformConfig should be recreated
+// because it represents an advertisable profile.
+func (r *VirtPlatformConfigReconciler) shouldRecreateAdvertisedProfile(profileName string) bool {
+	// Check if this profile exists in the registry
+	profile, err := profiles.DefaultRegistry.Get(profileName)
+	if err != nil {
+		// Not a registered profile, don't recreate
+		return false
+	}
+
+	// Only recreate if it's advertisable
+	return profile.IsAdvertisable()
+}
+
+// createAdvertisedProfile creates a single VirtPlatformConfig for an advertisable profile.
+// This is used both during initialization and when recreating deleted advertised profiles.
+// Returns (created, error) where created is true if a new object was created.
+func (r *VirtPlatformConfigReconciler) createAdvertisedProfile(ctx context.Context, c client.Client, profileName string, logger logr.Logger) (bool, error) {
+	profile, err := profiles.DefaultRegistry.Get(profileName)
+	if err != nil {
+		return false, fmt.Errorf("profile not found in registry: %w", err)
+	}
+
+	// Check if VirtPlatformConfig already exists
+	existing := &advisorv1alpha1.VirtPlatformConfig{}
+	err = c.Get(ctx, types.NamespacedName{Name: profileName}, existing)
+
+	if err == nil {
+		// Object exists - don't overwrite user modifications
+		logger.V(1).Info("VirtPlatformConfig already exists, skipping creation",
+			"profile", profileName)
+		return false, nil
+	}
+
+	if !errors.IsNotFound(err) {
+		return false, fmt.Errorf("failed to check for existing VirtPlatformConfig: %w", err)
+	}
+
+	// Create new VirtPlatformConfig with Ignore action
+	vpc := &advisorv1alpha1.VirtPlatformConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: profileName,
+			Annotations: map[string]string{
+				"advisor.kubevirt.io/description":    profile.GetDescription(),
+				"advisor.kubevirt.io/impact-summary": profile.GetImpactSummary(),
+				"advisor.kubevirt.io/auto-created":   "true",
+			},
+			Labels: map[string]string{
+				"advisor.kubevirt.io/category": profile.GetCategory(),
+			},
+		},
+		Spec: advisorv1alpha1.VirtPlatformConfigSpec{
+			Profile: profileName,
+			Action:  advisorv1alpha1.PlanActionIgnore, // Safe by default
+		},
+	}
+
+	if err := c.Create(ctx, vpc); err != nil {
+		return false, fmt.Errorf("failed to create VirtPlatformConfig: %w", err)
+	}
+
+	logger.Info("Created advertised VirtPlatformConfig",
+		"profile", profileName,
+		"category", profile.GetCategory(),
+		"description", profile.GetDescription())
+
+	return true, nil
+}
+
+// initializeAdvertisedProfiles creates VirtPlatformConfig objects for all advertisable profiles
+// with action=Ignore to enable profile discovery via kubectl get.
+// This function is idempotent - it will not overwrite existing VirtPlatformConfigs.
+// All errors are logged and handled internally - the function never fails.
+func (r *VirtPlatformConfigReconciler) initializeAdvertisedProfiles(ctx context.Context, c client.Client, logger logr.Logger) {
+	logger.Info("Initializing advertised profiles for discoverability")
+
+	createdCount := 0
+	skippedCount := 0
+
+	// Get all registered profile names
+	for _, profileName := range profiles.DefaultRegistry.List() {
+		profile, err := profiles.DefaultRegistry.Get(profileName)
+		if err != nil {
+			logger.Error(err, "Failed to get profile from registry", "profile", profileName)
+			continue
+		}
+
+		// Skip non-advertisable profiles (e.g., example-profile)
+		if !profile.IsAdvertisable() {
+			logger.V(1).Info("Skipping non-advertisable profile", "profile", profileName)
+			skippedCount++
+			continue
+		}
+
+		// Use the helper function to create the profile
+		created, err := r.createAdvertisedProfile(ctx, c, profileName, logger)
+		if err != nil {
+			logger.Error(err, "Failed to create advertised VirtPlatformConfig", "profile", profileName)
+			// Continue with other profiles instead of failing completely
+			continue
+		}
+
+		if created {
+			createdCount++
+		} else {
+			skippedCount++
+		}
+	}
+
+	logger.Info("Profile advertising initialization complete",
+		"created", createdCount,
+		"skipped", skippedCount)
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	logger := mgr.GetLogger().WithName("setup")
@@ -1173,7 +1344,11 @@ func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		"registeredWatches", registeredWatchCount,
 		"skippedWatches", skippedWatchCount)
 
-	return controllerBuilder.
-		Named("virtplatformconfig").
-		Complete(r)
+	// Initialize advertised profiles using direct client (no cache dependency)
+	// In production with proper RBAC, this works immediately during setup.
+	// Note: In e2e tests there may be timing issues with RBAC propagation.
+	r.initializeAdvertisedProfiles(ctx, directClient, logger)
+
+	// Register controller with manager
+	return controllerBuilder.Named("virtplatformconfig").Complete(r)
 }

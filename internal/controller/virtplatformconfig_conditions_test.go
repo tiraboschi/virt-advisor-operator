@@ -209,6 +209,37 @@ func TestUpdatePhaseConditions(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "Ignored phase sets Ignored=True and all management conditions to False",
+			phase: advisorv1alpha1.PlanPhaseIgnored,
+			expected: map[string]conditionExpectation{
+				ConditionTypeIgnored: {
+					status:  metav1.ConditionTrue,
+					reason:  ReasonIgnored,
+					message: MessageIgnored,
+				},
+				ConditionTypeDrafting: {
+					status:  metav1.ConditionFalse,
+					reason:  ReasonNotIgnored,
+					message: MessageNotIgnored,
+				},
+				ConditionTypeInProgress: {
+					status:  metav1.ConditionFalse,
+					reason:  ReasonNotIgnored,
+					message: MessageNotIgnored,
+				},
+				ConditionTypeCompleted: {
+					status:  metav1.ConditionFalse,
+					reason:  ReasonNotIgnored,
+					message: MessageNotIgnored,
+				},
+				ConditionTypeDrifted: {
+					status:  metav1.ConditionFalse,
+					reason:  ReasonNotIgnored,
+					message: MessageNotIgnored,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -277,6 +308,13 @@ func TestUpdatePhaseConditions(t *testing.T) {
 				reconciler.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingPrereqFail)
 				reconciler.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressPrereqFail)
 				reconciler.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonPrerequisitesFailed, MessageCompletedPrereqFailed)
+
+			case advisorv1alpha1.PlanPhaseIgnored:
+				reconciler.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionTrue, ReasonIgnored, MessageIgnored)
+				reconciler.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+				reconciler.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+				reconciler.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+				reconciler.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
 			}
 
 			// Verify all expected conditions

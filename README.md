@@ -8,7 +8,10 @@ The virt-advisor-operator implements a declarative "Plan" pattern for managing c
 
 ### Key Features
 
-- **Preview & Approve Workflow**: DryRun mode calculates and displays proposed changes before applying them
+- **Preview & Approve Workflow**: Multiple action modes for flexible management
+  - `DryRun`: Calculate and display proposed changes before applying
+  - `Apply`: Immediately execute the configuration changes
+  - `Ignore`: Temporarily pause management without deleting the resource (no drift detection, no metrics, no reconciliation)
 - **Profile-Based Configuration**: Select from predefined capability sets (e.g., "LoadAwareRebalancing")
 - **Plugin Architecture for Drift Detection**:
   - Each profile declares which resources it manages via `GetManagedResourceTypes()`
@@ -68,6 +71,14 @@ kubectl patch virtplatformconfig load-aware-rebalancing \
 # Verify the changes were applied
 kubectl get kubedescheduler cluster -o yaml
 kubectl get machineconfig 99-worker-psi-karg -o yaml
+
+# To temporarily pause management (e.g., during troubleshooting)
+kubectl patch virtplatformconfig load-aware-rebalancing \
+  --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"Ignore"}]'
+
+# Resume management when ready
+kubectl patch virtplatformconfig load-aware-rebalancing \
+  --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"DryRun"}]'
 
 # Clean up
 kubectl delete -f config/samples/loadaware_sample.yaml

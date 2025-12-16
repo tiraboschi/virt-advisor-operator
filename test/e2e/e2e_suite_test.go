@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -88,11 +89,16 @@ var _ = BeforeSuite(func() {
 	_, err = utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install operator CRDs")
 
-	// Create namespace for the operator
-	By("creating operator namespace")
-	cmd = exec.Command("kubectl", "create", "ns", "virt-advisor-operator-system")
-	_, err = utils.Run(cmd)
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create operator namespace")
+	// Create namespace for the operator (openshift-cnv is the standard KubeVirt namespace on OpenShift)
+	By("creating operator namespace if it doesn't exist")
+	cmd = exec.Command("kubectl", "create", "ns", "openshift-cnv", "--dry-run=client", "-o", "yaml")
+	output, err := cmd.Output()
+	if err == nil {
+		cmd = exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(string(output))
+		_, err = utils.Run(cmd)
+		ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to create operator namespace")
+	}
 
 	// Deploy the controller so it's available for all test suites
 	By("deploying the controller-manager")
@@ -112,10 +118,8 @@ var _ = AfterSuite(func() {
 	cmd = exec.Command("make", "uninstall")
 	_, _ = utils.Run(cmd)
 
-	// Delete operator namespace
-	_, _ = fmt.Fprintf(GinkgoWriter, "Deleting operator namespace...\n")
-	cmd = exec.Command("kubectl", "delete", "ns", "virt-advisor-operator-system")
-	_, _ = utils.Run(cmd)
+	// Note: We do NOT delete the openshift-cnv namespace as it's a standard namespace
+	// that may be shared with other KubeVirt components on OpenShift clusters
 
 	// Teardown CertManager after the suite if not skipped and if it was not already installed
 	if !skipCertManagerInstall && !isCertManagerAlreadyInstalled {

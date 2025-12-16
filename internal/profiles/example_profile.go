@@ -84,6 +84,26 @@ func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client,
 	return items, nil
 }
 
+// GetDescription returns a human-readable description of this profile
+func (p *ExampleProfile) GetDescription() string {
+	return "Example profile for demonstration purposes only"
+}
+
+// GetCategory returns the category this profile belongs to
+func (p *ExampleProfile) GetCategory() string {
+	return "example"
+}
+
+// GetImpactSummary returns a summary of the impact of enabling this profile
+func (p *ExampleProfile) GetImpactSummary() string {
+	return "None - Example profile with no real resources"
+}
+
+// IsAdvertisable returns false since this is an example profile
+func (p *ExampleProfile) IsAdvertisable() bool {
+	return false
+}
+
 func init() {
 	// Register this profile in the default registry
 	if err := DefaultRegistry.Register(NewExampleProfile()); err != nil {

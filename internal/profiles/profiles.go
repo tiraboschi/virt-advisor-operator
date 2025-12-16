@@ -57,6 +57,25 @@ type Profile interface {
 	// CRITICAL: You MUST use PlanItemBuilder to construct items, not manually.
 	// See the Profile interface documentation for usage example.
 	GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error)
+
+	// GetDescription returns a human-readable one-line description of this profile.
+	// Used for profile advertising annotations.
+	GetDescription() string
+
+	// GetCategory returns the category this profile belongs to.
+	// Examples: "scheduling", "performance", "storage", "networking"
+	// Used for profile advertising labels.
+	GetCategory() string
+
+	// GetImpactSummary returns a summary of the impact of enabling this profile.
+	// Examples: "Low - Configuration only", "Medium - May require node reboots"
+	// Used for profile advertising annotations.
+	GetImpactSummary() string
+
+	// IsAdvertisable returns true if this profile should be auto-created as a
+	// VirtPlatformConfig with action=Ignore on operator startup for discoverability.
+	// Returns false for example/dev/internal profiles.
+	IsAdvertisable() bool
 }
 
 // Registry manages the collection of available profiles.

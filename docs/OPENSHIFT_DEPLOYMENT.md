@@ -76,7 +76,7 @@ make deploy IMG=${IMG}
 ```
 
 This creates:
-- Namespace: `virt-advisor-operator-system`
+- Namespace: `openshift-cnv`
 - ServiceAccount with appropriate RBAC
 - Deployment running the operator pod
 - ClusterRole and ClusterRoleBinding for cross-namespace operations
@@ -92,13 +92,13 @@ The operator's ClusterRole includes permissions to:
 Verify the deployment:
 ```bash
 # Check the namespace was created
-oc get namespace virt-advisor-operator-system
+oc get namespace openshift-cnv
 
 # Check the operator pod is running
-oc get pods -n virt-advisor-operator-system
+oc get pods -n openshift-cnv
 
 # Check operator logs
-oc logs -n virt-advisor-operator-system -l control-plane=controller-manager -f
+oc logs -n openshift-cnv -l control-plane=controller-manager -f
 ```
 
 You should see logs like:
@@ -127,12 +127,12 @@ If the deployment doesn't trigger a pod restart, manually restart the operator:
 
 ```bash
 oc rollout restart deployment/virt-advisor-operator-controller-manager \
-  -n virt-advisor-operator-system
+  -n openshift-cnv
 ```
 
 Verify the new pod is running:
 ```bash
-oc get pods -n virt-advisor-operator-system -w
+oc get pods -n openshift-cnv -w
 ```
 
 ## Installing Required Operators (for load-aware-rebalancing)
@@ -502,8 +502,8 @@ spec:
 
 Check pod status:
 ```bash
-oc get pods -n virt-advisor-operator-system
-oc describe pod -n virt-advisor-operator-system -l control-plane=controller-manager
+oc get pods -n openshift-cnv
+oc describe pod -n openshift-cnv -l control-plane=controller-manager
 ```
 
 Common issues:
@@ -516,7 +516,7 @@ Common issues:
 If you see errors like:
 ```
 kubedeschedulers.operator.openshift.io "cluster" is forbidden:
-User "system:serviceaccount:virt-advisor-operator-system:virt-advisor-operator-controller-manager"
+User "system:serviceaccount:openshift-cnv:virt-advisor-operator-controller-manager"
 cannot get resource "kubedeschedulers" in API group "operator.openshift.io"
 ```
 
@@ -547,7 +547,7 @@ This means the ClusterRole doesn't have the required permissions.
 4. Restart the operator pod to pick up new permissions:
    ```bash
    oc rollout restart deployment/virt-advisor-operator-controller-manager \
-     -n virt-advisor-operator-system
+     -n openshift-cnv
    ```
 
 5. Check the VirtPlatformConfig status again:
@@ -636,12 +636,12 @@ oc logs -n openshift-machine-config-operator -l k8s-app=machine-config-operator
 
 View operator logs:
 ```bash
-oc logs -n virt-advisor-operator-system deployment/virt-advisor-operator-controller-manager -f
+oc logs -n openshift-cnv deployment/virt-advisor-operator-controller-manager -f
 ```
 
 Enable debug logging (if supported):
 ```bash
-oc set env deployment/virt-advisor-operator-controller-manager -n virt-advisor-operator-system LOG_LEVEL=debug
+oc set env deployment/virt-advisor-operator-controller-manager -n openshift-cnv LOG_LEVEL=debug
 ```
 
 ## Uninstalling
@@ -729,7 +729,7 @@ The operator will expose metrics:
 
 Watch Kubernetes events:
 ```bash
-oc get events -n virt-advisor-operator-system --watch
+oc get events -n openshift-cnv --watch
 ```
 
 ### Status Conditions
@@ -790,6 +790,6 @@ spec:
 
 ## Getting Help
 
-- Check operator logs: `oc logs -n virt-advisor-operator-system -l control-plane=controller-manager`
+- Check operator logs: `oc logs -n openshift-cnv -l control-plane=controller-manager`
 - Review status: `oc get virtplatformconfig -o yaml`
 - Open issues: https://github.com/kubevirt/virt-advisor-operator/issues

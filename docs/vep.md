@@ -46,17 +46,67 @@ We propose a new CRD `VirtPlatformConfig` in the `advisor.kubevirt.io` API group
 
 The workflow depends on the admin's desired level of control: **Interactive Review** or **Auto-Approval**.
 
-**1. Discovery:**
-The Cluster Admin discovers available profiles via the CRD Schema.
+**1. Discovery via Profile Advertising:**
+
+To improve discoverability and reduce the barrier to entry, the operator automatically creates VirtPlatformConfig objects for all available profiles during initialization. These pre-created resources serve as living documentation and enable a seamless activation workflow.
+
+**Implementation Strategy:**
+1. **Startup Initialization:** During controller startup, the operator queries the profile registry for all "real" (non-example) profiles.
+2. **Resource Creation:** For each profile, it creates a VirtPlatformConfig object with:
+   - `metadata.name`: Matching the profile name (enforced by CEL validation)
+   - `spec.profile`: The profile name
+   - `spec.action`: `Ignore` (safe by default - no immediate reconciliation)
+   - `metadata.annotations`: Helpful metadata like description, prerequisites, impact level
+   - `metadata.labels`: Classification tags (e.g., `advisor.kubevirt.io/category: scheduling`)
+
+3. **Idempotency:** On each startup, check if VirtPlatformConfig exists. If yes, skip (respect user modifications). If no, create with `action: Ignore`.
+
+4. **Lifecycle:** Objects are auto-created on every startup if missing. If a user deletes one, it will be recreated on next restart with `action: Ignore` (which is harmless - no reconciliation occurs). Users who want to "hide" a profile don't need to delete it - they simply leave it with `action: Ignore`.
+
+**User Experience:**
+
+Instead of reading documentation or inspecting CRD schemas, admins can simply:
+
+```bash
+# Discover all available profiles
+$ kubectl get virtplatformconfig
+NAME                      PROFILE                   ACTION   PHASE     AGE
+load-aware-rebalancing    load-aware-rebalancing    Ignore   Ignored   5m
+high-density-swap         high-density-swap         Ignore   Ignored   5m
+
+# Inspect a profile's details via annotations
+$ kubectl get virtplatformconfig load-aware-rebalancing -o yaml
+# Shows description, prerequisites, and configuration options in annotations
+
+# Activate a profile (simple two-step workflow)
+$ kubectl patch virtplatformconfig load-aware-rebalancing \
+  --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"DryRun"}]'
+# Review the generated diff in status...
+$ kubectl patch virtplatformconfig load-aware-rebalancing \
+  --type='json' -p='[{"op": "replace", "path": "/spec/action", "value":"Apply"}]'
+```
+
+**Benefits:**
+- **Self-Documenting:** The cluster advertises its own capabilities via standard Kubernetes resources
+- **Lower Cognitive Load:** No need to memorize profile names or search external documentation
+- **Kubernetes-Native Discovery:** Uses familiar `kubectl get` commands instead of reading docs
+- **Safe Exploration:** Admins can inspect pre-created objects without triggering changes
+- **Consistent Workflow:** Activation is always a simple `kubectl patch` operation
+- **Version Awareness:** Auto-created objects reflect the profiles available in the deployed operator version
+- **GitOps Friendly:** Pre-created resources can be exported and version-controlled
+
+**Alternative Discovery (Traditional):**
+For admins who prefer CRD introspection:
 ```bash
 $ kubectl explain virtplatformconfig.spec.profile
-# Valid values: "LoadAwareRebalancing", "HighDensitySwap"...
+# Valid values: "load-aware-rebalancing", "high-density-swap"...
 ```
 
 **2. The "Action" Model:**
 The `spec.action` field dictates the controller's behavior:
 * **`DryRun` (Default):** The controller calculates the plan, populates the diff in `.status`, and pauses.
 * **`Apply`:** The controller calculates the plan and, if prerequisites are met, immediately executes it.
+* **`Ignore`:** The controller completely ignores this configuration - no planning, no drift detection, no metrics. The resource is effectively paused. **IMPORTANT:** Changing to `Ignore` does NOT rollback or undo any changes previously applied by this profile. Resources remain in their current state, and the cluster admin assumes full manual control of those resources. Use this to hand over management control without deleting the object.
 
 ### User Stories
 
@@ -72,6 +122,15 @@ As an admin using GitOps, I want to enable a profile immediately.
 1.  I apply a manifest with `action: Apply`.
 2.  The Operator immediately checks prerequisites.
 3.  Since `action` is `Apply`, it skips the pause and moves directly to `InProgress`.
+
+#### Story 3: Hand Over Management Control (Ignore)
+As an admin troubleshooting an issue, I want to take manual control of resources without the operator interfering.
+1.  I patch the existing VirtPlatformConfig: `kubectl patch virtplatformconfig load-aware-rebalancing -p '{"spec": {"action": "Ignore"}}'`
+2.  The Operator transitions to `phase: Ignored` and sets the `Ignored` condition to True.
+3.  No drift detection, no metrics collection, no reconciliation occurs. **Resources remain in their current state** - any changes previously applied by the profile are NOT rolled back.
+4.  I now have full manual control of the affected resources (KubeDescheduler, MachineConfigs, etc.).
+5.  When ready to resume operator management, I change the action back to `DryRun` or `Apply`.
+6.  The Operator resets to `Pending` phase and regenerates the plan from scratch based on current cluster state.
 
 ### API Design
 
@@ -445,7 +504,136 @@ To ensure a specific configuration (e.g., a specific Descheduler profile) is val
 2.  Traverse the JSON Schema: `spec.versions[].schema.openAPIV3Schema.properties.spec.properties.profiles.items.enum`.
 3.  Check if `KubeVirtRelieveAndMigrate` or `DevKubeVirtRelieveAndMigrate` are in the allowed list.
 
-### 3. Handling Missing Dependencies in `VirtPlatformConfig`
+### 3. Profile Metadata & Advertising
+
+To support the profile advertising feature (auto-initialization of VirtPlatformConfig objects), the Profile interface must be extended to expose metadata that can be used to populate annotations and labels on the auto-created resources.
+
+**Extended Profile Interface:**
+
+```go
+type Profile interface {
+    // Core functionality (existing)
+    GetName() string
+    GetPrerequisites() []discovery.Prerequisite
+    Validate(config map[string]string) error
+    GeneratePlanItems(ctx context.Context, c client.Client, config map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error)
+    GetManagedResourceTypes() []schema.GroupVersionKind
+
+    // Metadata for advertising (new)
+    GetDescription() string        // Human-readable one-line description
+    GetCategory() string            // e.g., "scheduling", "performance", "storage", "networking"
+    GetImpactSummary() string      // e.g., "Medium - May require node reboots", "Low - Configuration only"
+    GetDocumentationURL() string   // Link to detailed docs
+    IsAdvertisable() bool          // false for example/dev/internal profiles
+}
+```
+
+**Auto-Initialization Logic:**
+
+During controller startup (in `SetupWithManager` or a dedicated initialization reconciler):
+
+```go
+func (r *VirtPlatformConfigReconciler) initializeAdvertisedProfiles(ctx context.Context) error {
+    logger := log.FromContext(ctx)
+
+    // Get all advertisable profiles from registry
+    for _, profileName := range profiles.DefaultRegistry.List() {
+        profile, _ := profiles.DefaultRegistry.Get(profileName)
+
+        // Skip non-advertisable profiles (e.g., "example-profile")
+        if !profile.IsAdvertisable() {
+            continue
+        }
+
+        // Check if VirtPlatformConfig already exists (user may have created/modified it)
+        existing := &advisorv1alpha1.VirtPlatformConfig{}
+        err := r.Get(ctx, types.NamespacedName{Name: profileName}, existing)
+
+        if err == nil {
+            // Object exists - don't overwrite user modifications
+            logger.V(1).Info("VirtPlatformConfig already exists, skipping initialization",
+                "profile", profileName)
+            continue
+        }
+
+        if !errors.IsNotFound(err) {
+            return err
+        }
+
+        // Create new VirtPlatformConfig with Ignore action
+        vpc := &advisorv1alpha1.VirtPlatformConfig{
+            ObjectMeta: metav1.ObjectMeta{
+                Name: profileName,
+                Annotations: map[string]string{
+                    "advisor.kubevirt.io/description":       profile.GetDescription(),
+                    "advisor.kubevirt.io/impact-summary":    profile.GetImpactSummary(),
+                    "advisor.kubevirt.io/documentation-url": profile.GetDocumentationURL(),
+                    "advisor.kubevirt.io/auto-created":      "true", // Track that this was auto-created
+                },
+                Labels: map[string]string{
+                    "advisor.kubevirt.io/category": profile.GetCategory(),
+                },
+            },
+            Spec: advisorv1alpha1.VirtPlatformConfigSpec{
+                Profile: profileName,
+                Action:  advisorv1alpha1.PlanActionIgnore, // Safe by default
+            },
+        }
+
+        if err := r.Create(ctx, vpc); err != nil {
+            logger.Error(err, "Failed to create advertised VirtPlatformConfig", "profile", profileName)
+            // Continue with other profiles instead of failing completely
+            continue
+        }
+
+        logger.Info("Created advertised VirtPlatformConfig", "profile", profileName)
+    }
+
+    return nil
+}
+```
+
+**Lifecycle Considerations:**
+
+1. **Deletion by User:** If a user deletes a VirtPlatformConfig, it will be recreated on the next operator restart with `action: Ignore`. This is harmless since Ignore mode means no reconciliation occurs. Users don't need to delete profiles to "hide" them - they can simply leave them with `action: Ignore`.
+
+2. **Upgrades:** When the operator upgrades and new profiles are added, the initialization logic will automatically create VirtPlatformConfigs for the new profiles on the next startup.
+
+3. **Idempotency:** The initialization logic checks if each VirtPlatformConfig already exists before creating it. If it exists (whether user-created or previously auto-created), the logic skips it entirely to preserve user modifications.
+
+**Example Profile Implementation:**
+
+```go
+type LoadAwareProfile struct{}
+
+func (p *LoadAwareProfile) GetName() string {
+    return "load-aware-rebalancing"
+}
+
+func (p *LoadAwareProfile) GetDescription() string {
+    return "Enables load-aware VM rebalancing and PSI metrics for intelligent scheduling"
+}
+
+func (p *LoadAwareProfile) GetCategory() string {
+    return "scheduling"
+}
+
+func (p *LoadAwareProfile) GetImpactSummary() string {
+    return "Medium - May require node reboots if PSI metrics are enabled"
+}
+
+func (p *LoadAwareProfile) GetDocumentationURL() string {
+    return "https://github.com/kubevirt/virt-advisor-operator/blob/main/docs/profiles/load-aware-rebalancing.md"
+}
+
+func (p *LoadAwareProfile) IsAdvertisable() bool {
+    return true // This is a real profile, not an example
+}
+
+// ... existing methods (GetPrerequisites, Validate, GeneratePlanItems, etc.)
+```
+
+### 4. Handling Missing Dependencies in `VirtPlatformConfig`
 If a soft dependency is missing or incompatible, the `VirtPlatformConfig` must gracefully halt to avoid crashing the controller.
 
 **State Transitions:**
@@ -456,7 +644,7 @@ If a soft dependency is missing or incompatible, the `VirtPlatformConfig` must g
     * **Message:** *"The CRD 'KubeDescheduler' is not found. Please install the Descheduler Operator via OLM."*
 3.  **Behavior:** The controller **stops processing** (does not attempt to calculate Diff) and re-queues with a slow backoff (e.g., 5 minutes) to check if the user installed it later.
 
-### 4. Controller Setup (Restart on Discovery)
+### 5. Controller Setup (Restart on Discovery)
 We cannot register a standard `Watch` for a Kind that doesn't exist at startup, as this would cause the controller to crash during setup.
 Handling dynamic watchers in `controller-runtime` is complex and prone to race conditions. Instead, we adopt a **"Restart on Discovery"** strategy.
 
