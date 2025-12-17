@@ -578,6 +578,7 @@ func stringPtr(s string) *string {
 func TestConditionConstants(t *testing.T) {
 	// Verify condition types
 	conditionTypes := []string{
+		ConditionTypePending,
 		ConditionTypeDrafting,
 		ConditionTypeInProgress,
 		ConditionTypeCompleted,
@@ -586,6 +587,7 @@ func TestConditionConstants(t *testing.T) {
 		ConditionTypeReviewReq,
 		ConditionTypePrereqFail,
 		ConditionTypeCompletedErr,
+		ConditionTypeIgnored,
 	}
 
 	for _, ct := range conditionTypes {

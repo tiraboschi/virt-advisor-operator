@@ -70,6 +70,7 @@ rules:
   resources:
   - kubedeschedulers
   verbs:
+  - create
   - get
   - list
   - patch
