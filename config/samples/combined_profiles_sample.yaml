@@ -1,0 +1,49 @@
+# Example: Using both load-aware-rebalancing and virt-higher-density profiles together
+# These profiles are independent and can be managed separately
+
+---
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      # Run descheduler every 2 minutes (120 seconds)
+      deschedulingIntervalSeconds: 120
+      # Enable PSI (Pressure Stall Information) metrics
+      enablePSIMetrics: true
+      # Set deviation thresholds for load balancing
+      devDeviationThresholds: AsymmetricMedium
+
+---
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      # Enable swap for higher VM density
+      enableSwap: true
+
+# Usage Notes:
+# 1. Both profiles can be applied simultaneously
+# 2. Each profile manages different resources:
+#    - load-aware-rebalancing: KubeDescheduler + MachineConfig (PSI)
+#    - virt-higher-density: MachineConfig (swap)
+# 3. Both require node reboots for MachineConfig changes
+# 4. Review diffs in DryRun mode before changing action to Apply
+# 5. Monitor rollout progress via VirtPlatformConfig status
+
+# Example workflow:
+# 1. Apply both configs in DryRun mode: kubectl apply -f combined_profiles_sample.yaml
+# 2. Review diffs: kubectl get virtplatformconfig <name> -o yaml
+# 3. Approve both: kubectl patch virtplatformconfig <name> --type=json -p='[{"op":"replace","path":"/spec/action","value":"Apply"}]'
+# 4. Monitor progress: kubectl get virtplatformconfig -w

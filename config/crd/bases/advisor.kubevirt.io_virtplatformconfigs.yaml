@@ -132,6 +132,17 @@ spec:
                         - Predictive
                         type: string
                     type: object
+                  virtHigherDensity:
+                    description: VirtHigherDensity config (only valid when profile=virt-higher-density)
+                    properties:
+                      enableSwap:
+                        default: true
+                        description: |-
+                          EnableSwap controls whether to enable swap on worker nodes for higher VM density.
+                          When enabled, deploys a MachineConfig that provisions swap from a partition labeled CNV_SWAP
+                          and configures kubelet to use LimitedSwap behavior.
+                        type: boolean
+                    type: object
                 type: object
               profile:
                 description: |-
@@ -216,6 +227,17 @@ spec:
                         - Automatic
                         - Predictive
                         type: string
+                    type: object
+                  virtHigherDensity:
+                    description: VirtHigherDensity config (only valid when profile=virt-higher-density)
+                    properties:
+                      enableSwap:
+                        default: true
+                        description: |-
+                          EnableSwap controls whether to enable swap on worker nodes for higher VM density.
+                          When enabled, deploys a MachineConfig that provisions swap from a partition labeled CNV_SWAP
+                          and configures kubelet to use LimitedSwap behavior.
+                        type: boolean
                     type: object
                 type: object
               conditions:

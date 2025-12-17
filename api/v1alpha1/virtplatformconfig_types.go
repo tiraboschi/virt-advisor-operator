@@ -113,9 +113,9 @@ type ProfileOptions struct {
 	// +optional
 	LoadAware *LoadAwareConfig `json:"loadAware,omitempty"`
 
-	// Future profiles will add their config types here:
+	// VirtHigherDensity config (only valid when profile=virt-higher-density)
 	// +optional
-	// HighDensity *HighDensityConfig `json:"highDensity,omitempty"`
+	VirtHigherDensity *VirtHigherDensityConfig `json:"virtHigherDensity,omitempty"`
 }
 
 // LoadAwareConfig contains typed configuration for the load-aware-rebalancing profile.
@@ -150,6 +150,16 @@ type LoadAwareConfig struct {
 	// +kubebuilder:validation:Enum=Low;Medium;High;AsymmetricLow;AsymmetricMedium;AsymmetricHigh
 	// +optional
 	DevDeviationThresholds *string `json:"devDeviationThresholds,omitempty"`
+}
+
+// VirtHigherDensityConfig contains typed configuration for the virt-higher-density profile.
+type VirtHigherDensityConfig struct {
+	// EnableSwap controls whether to enable swap on worker nodes for higher VM density.
+	// When enabled, deploys a MachineConfig that provisions swap from a partition labeled CNV_SWAP
+	// and configures kubelet to use LimitedSwap behavior.
+	// +kubebuilder:default=true
+	// +optional
+	EnableSwap *bool `json:"enableSwap,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;Failed;Drifted;Ignored

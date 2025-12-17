@@ -127,6 +127,40 @@ Implements the VEP's load-aware rebalancing capability by configuring:
 - Medium: Creates or updates descheduler configuration
 - High: Enables PSI metrics (requires node reboot in real OpenShift clusters)
 
+### virt-higher-density
+Implements higher VM density configurations for virtualization workloads by enabling kubelet swap and memory overcommitment.
+
+**Configuration:**
+1. **MachineConfig**: Deploys swap configuration for worker nodes
+   - Provisions swap from partition labeled `CNV_SWAP`
+   - Configures kubelet with `LimitedSwap` behavior
+   - Sets up systemd units for swap management
+   - Restricts swap usage for system slice
+
+**Supported Config Options:**
+- `enableSwap`: Whether to enable swap on worker nodes (default: true)
+
+**Impact:**
+- High: Requires node reboot for swap configuration changes
+
+**Prerequisites:**
+- Nodes must have a swap partition labeled with `CNV_SWAP`
+- MachineConfig CRD (available on OpenShift)
+
+**Example:**
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  options:
+    virtHigherDensity:
+      enableSwap: true
+```
+
 ## Deployment
 
 ### OpenShift Cluster Deployment

@@ -1,0 +1,30 @@
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  # Profile to apply
+  profile: virt-higher-density
+
+  # Action determines what the operator does with this profile
+  # - DryRun: Calculate and display proposed changes without applying them
+  # - Apply: Execute the configuration changes
+  # - Ignore: Temporarily pause management without deleting the resource
+  action: DryRun
+
+  # Failure policy for handling errors during application
+  # - Abort: Stop applying remaining items if one fails
+  # - Continue: Continue applying remaining items even if one fails
+  failurePolicy: Abort
+
+  # Optional: Profile-specific configuration options
+  options:
+    virtHigherDensity:
+      # Enable swap on worker nodes (default: true)
+      # Set to false to disable swap (will remove MachineConfig if previously applied)
+      enableSwap: true
+
+  # Optional: Maximum time to wait for rollout to complete
+  # For large clusters with many VMs, this can take hours or days
+  # Recommendation: Do not set or set very high for production
+  # waitTimeout: 24h

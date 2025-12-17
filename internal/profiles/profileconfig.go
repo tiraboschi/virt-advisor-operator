@@ -20,6 +20,11 @@ func OptionsToMap(profileName string, options *advisorv1alpha1.ProfileOptions) m
 			return map[string]string{}
 		}
 		return loadAwareToMap(options.LoadAware)
+	case ProfileNameVirtHigherDensity:
+		if options.VirtHigherDensity == nil {
+			return map[string]string{}
+		}
+		return virtHigherDensityToMap(options.VirtHigherDensity)
 	default:
 		return map[string]string{}
 	}
@@ -39,6 +44,17 @@ func loadAwareToMap(config *advisorv1alpha1.LoadAwareConfig) map[string]string {
 
 	if config.DevDeviationThresholds != nil {
 		m["devDeviationThresholds"] = *config.DevDeviationThresholds
+	}
+
+	return m
+}
+
+// virtHigherDensityToMap converts VirtHigherDensityConfig to map format.
+func virtHigherDensityToMap(config *advisorv1alpha1.VirtHigherDensityConfig) map[string]string {
+	m := make(map[string]string)
+
+	if config.EnableSwap != nil {
+		m["enableSwap"] = strconv.FormatBool(*config.EnableSwap)
 	}
 
 	return m
@@ -81,6 +97,10 @@ func ValidateOptions(profileName string, options *advisorv1alpha1.ProfileOptions
 	switch profileName {
 	case ProfileNameLoadAware:
 		// LoadAware can be nil (use defaults) or set (use custom values)
+		// No validation needed - CEL already ensures other fields aren't set
+		return nil
+	case ProfileNameVirtHigherDensity:
+		// VirtHigherDensity can be nil (use defaults) or set (use custom values)
 		// No validation needed - CEL already ensures other fields aren't set
 		return nil
 	default:

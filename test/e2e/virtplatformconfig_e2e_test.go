@@ -1231,6 +1231,432 @@ spec:
 			}
 		})
 	})
+
+	Context("VirtHigherDensity Profile", func() {
+		It("should detect missing MachineConfig CRD prerequisite", func() {
+			By("applying virt-higher-density profile")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying controller detects missing MachineConfig CRD")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("virt-higher-density")
+				// In Kind cluster without OpenShift, should fail prerequisites
+				g.Expect(status.Phase).To(Equal("PrerequisiteFailed"),
+					"Should detect missing MachineConfig CRD")
+
+				prereqCondition := findCondition(status.Conditions, "PrerequisiteFailed")
+				g.Expect(prereqCondition).NotTo(BeNil())
+				g.Expect(prereqCondition.Status).To(Equal("True"))
+				// Message should mention the missing MachineConfig CRD
+				g.Expect(prereqCondition.Message).To(Or(
+					ContainSubstring("machineconfigs.machineconfiguration.openshift.io"),
+					ContainSubstring("MachineConfig"),
+					ContainSubstring("CRD"),
+				))
+			}).Should(Succeed())
+		})
+
+		It("should accept valid profile with default options", func() {
+			By("applying virt-higher-density without options")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Profile should work with default options")
+
+			By("verifying controller processes it")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("virt-higher-density")
+				g.Expect(status.Phase).NotTo(BeEmpty(), "Controller should set a phase")
+			}).Should(Succeed())
+		})
+
+		It("should accept enableSwap option", func() {
+			By("applying virt-higher-density with enableSwap=true")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept enableSwap option")
+
+			By("verifying the VirtPlatformConfig is created with correct options")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "jsonpath={.spec.options.virtHigherDensity.enableSwap}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("true"))
+			}).Should(Succeed())
+		})
+
+		It("should accept enableSwap=false", func() {
+			By("applying virt-higher-density with enableSwap=false")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: false
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept enableSwap=false")
+
+			By("verifying controller processes it")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("virt-higher-density")
+				// Should still process (and fail prerequisites in Kind)
+				g.Expect(status.Phase).NotTo(BeEmpty(), "Controller should set a phase")
+			}).Should(Succeed())
+		})
+
+		It("should auto-create VirtPlatformConfig for virt-higher-density on startup", func() {
+			By("verifying virt-higher-density VirtPlatformConfig was auto-created")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred(), "virt-higher-density VirtPlatformConfig should exist")
+
+				// Parse JSON to verify details
+				var vpc map[string]interface{}
+				err = json.Unmarshal([]byte(output), &vpc)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Verify spec.action is Ignore
+				spec := vpc["spec"].(map[string]interface{})
+				g.Expect(spec["action"]).To(Equal("Ignore"),
+					"Auto-created VirtPlatformConfig should have action=Ignore")
+
+				// Verify spec.profile matches name
+				g.Expect(spec["profile"]).To(Equal("virt-higher-density"))
+
+				// Verify metadata annotations exist
+				metadata := vpc["metadata"].(map[string]interface{})
+				annotations := metadata["annotations"].(map[string]interface{})
+				g.Expect(annotations["advisor.kubevirt.io/description"]).NotTo(BeEmpty(),
+					"Should have description annotation")
+				g.Expect(annotations["advisor.kubevirt.io/impact-summary"]).NotTo(BeEmpty(),
+					"Should have impact-summary annotation")
+				g.Expect(annotations["advisor.kubevirt.io/auto-created"]).To(Equal("true"),
+					"Should have auto-created annotation")
+
+				// Verify metadata labels exist
+				labels := metadata["labels"].(map[string]interface{})
+				g.Expect(labels["advisor.kubevirt.io/category"]).To(Equal("density"),
+					"Should have correct category label")
+			}).Should(Succeed())
+		})
+
+		It("should populate metadata from profile", func() {
+			By("getting virt-higher-density VirtPlatformConfig")
+			cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+				"-o", "json")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			var vpc map[string]interface{}
+			err = json.Unmarshal([]byte(output), &vpc)
+			Expect(err).NotTo(HaveOccurred())
+
+			metadata := vpc["metadata"].(map[string]interface{})
+			annotations := metadata["annotations"].(map[string]interface{})
+
+			By("verifying description annotation")
+			description := annotations["advisor.kubevirt.io/description"].(string)
+			Expect(description).To(ContainSubstring("density"),
+				"Description should mention density")
+
+			By("verifying impact summary annotation mentions swap")
+			impact := annotations["advisor.kubevirt.io/impact-summary"].(string)
+			Expect(impact).To(ContainSubstring("swap"),
+				"Impact summary should mention swap")
+			Expect(impact).To(ContainSubstring("CNV_SWAP"),
+				"Impact summary should mention CNV_SWAP partition requirement")
+
+			By("verifying category label")
+			labels := metadata["labels"].(map[string]interface{})
+			category := labels["advisor.kubevirt.io/category"].(string)
+			Expect(category).To(Equal("density"),
+				"Category should be 'density' for virt-higher-density profile")
+		})
+	})
+
+	Context("Combined Profiles", func() {
+		It("should allow multiple profiles to coexist independently", func() {
+			By("creating load-aware-rebalancing config")
+			loadAwareYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(loadAwareYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("creating virt-higher-density config")
+			virtHigherDensityYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd = exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(virtHigherDensityYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying both configs exist and are processed independently")
+			Eventually(func(g Gomega) {
+				loadAwareStatus := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				virtHigherDensityStatus := getVirtPlatformConfigStatus("virt-higher-density")
+
+				// Both should be processed (likely PrerequisiteFailed in Kind)
+				g.Expect(loadAwareStatus.Phase).NotTo(BeEmpty(),
+					"load-aware-rebalancing should be processed")
+				g.Expect(virtHigherDensityStatus.Phase).NotTo(BeEmpty(),
+					"virt-higher-density should be processed")
+
+				// Both should have conditions
+				g.Expect(loadAwareStatus.Conditions).NotTo(BeEmpty(),
+					"load-aware-rebalancing should have conditions")
+				g.Expect(virtHigherDensityStatus.Conditions).NotTo(BeEmpty(),
+					"virt-higher-density should have conditions")
+			}).Should(Succeed())
+		})
+
+		It("should handle one profile succeeding while another fails prerequisites", func() {
+			By("ensuring both profiles are in DryRun mode")
+			// Patch both profiles to DryRun (they may be auto-created with action=Ignore)
+			cmd := exec.Command("kubectl", "patch", "virtplatformconfig", "load-aware-rebalancing",
+				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", "virt-higher-density",
+				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying both fail prerequisites independently")
+			Eventually(func(g Gomega) {
+				loadAwareStatus := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				virtHigherDensityStatus := getVirtPlatformConfigStatus("virt-higher-density")
+
+				// In Kind cluster without OpenShift CRDs, both should fail
+				g.Expect(loadAwareStatus.Phase).To(Equal("PrerequisiteFailed"),
+					"load-aware should fail prerequisites")
+				g.Expect(virtHigherDensityStatus.Phase).To(Equal("PrerequisiteFailed"),
+					"virt-higher-density should fail prerequisites")
+
+				// Each should report their specific missing prerequisites
+				loadAwarePrereq := findCondition(loadAwareStatus.Conditions, "PrerequisiteFailed")
+				virtHigherDensityPrereq := findCondition(virtHigherDensityStatus.Conditions, "PrerequisiteFailed")
+
+				g.Expect(loadAwarePrereq).NotTo(BeNil())
+				g.Expect(virtHigherDensityPrereq).NotTo(BeNil())
+
+				// load-aware requires KubeDescheduler and MachineConfig
+				g.Expect(loadAwarePrereq.Message).To(Or(
+					ContainSubstring("kubedeschedulers"),
+					ContainSubstring("KubeDescheduler"),
+					ContainSubstring("machineconfigs"),
+				))
+
+				// virt-higher-density requires MachineConfig
+				g.Expect(virtHigherDensityPrereq.Message).To(Or(
+					ContainSubstring("machineconfigs"),
+					ContainSubstring("MachineConfig"),
+				))
+			}).Should(Succeed())
+		})
+
+		It("should allow switching one profile to Ignore while keeping another active", func() {
+			By("setting load-aware-rebalancing to DryRun")
+			cmd := exec.Command("kubectl", "patch", "virtplatformconfig", "load-aware-rebalancing",
+				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("setting virt-higher-density to Ignore")
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", "virt-higher-density",
+				"--type=merge", "-p", `{"spec":{"action":"Ignore"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying load-aware is in processing phase")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				g.Expect(status.Phase).To(BeElementOf("Drafting", "PrerequisiteFailed", "ReviewRequired"),
+					"load-aware should be processing")
+			}).Should(Succeed())
+
+			By("verifying virt-higher-density is Ignored")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("virt-higher-density")
+				g.Expect(status.Phase).To(Equal("Ignored"),
+					"virt-higher-density should be Ignored")
+			}).Should(Succeed())
+
+			By("switching virt-higher-density back to DryRun")
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", "virt-higher-density",
+				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying virt-higher-density exits Ignored")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("virt-higher-density")
+				g.Expect(status.Phase).NotTo(Equal("Ignored"),
+					"virt-higher-density should exit Ignored phase")
+			}).Should(Succeed())
+		})
+
+		It("should maintain independent status for each profile", func() {
+			By("ensuring both profiles are in DryRun mode")
+			// Patch both profiles to DryRun to ensure they're actively processing
+			cmd := exec.Command("kubectl", "patch", "virtplatformconfig", "load-aware-rebalancing",
+				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", "virt-higher-density",
+				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying each profile has independent conditions")
+			Eventually(func(g Gomega) {
+				loadAwareStatus := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				virtHigherDensityStatus := getVirtPlatformConfigStatus("virt-higher-density")
+
+				// Verify both have conditions
+				g.Expect(loadAwareStatus.Conditions).NotTo(BeEmpty())
+				g.Expect(virtHigherDensityStatus.Conditions).NotTo(BeEmpty())
+
+				// Verify each has prerequisite failed condition
+				loadAwarePrereq := findCondition(loadAwareStatus.Conditions, "PrerequisiteFailed")
+				virtHigherDensityPrereq := findCondition(virtHigherDensityStatus.Conditions, "PrerequisiteFailed")
+
+				g.Expect(loadAwarePrereq).NotTo(BeNil())
+				g.Expect(virtHigherDensityPrereq).NotTo(BeNil())
+
+				// Messages should be different (load-aware mentions KubeDescheduler too)
+				g.Expect(loadAwarePrereq.Message).NotTo(Equal(virtHigherDensityPrereq.Message),
+					"Prerequisites should be specific to each profile")
+			}).Should(Succeed())
+		})
+
+		It("should support both profiles with custom options simultaneously", func() {
+			By("applying load-aware-rebalancing with custom options")
+			loadAwareYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      deschedulingIntervalSeconds: 120
+      enablePSIMetrics: true
+      devDeviationThresholds: High
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(loadAwareYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("applying virt-higher-density with custom options")
+			virtHigherDensityYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+`
+			cmd = exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(virtHigherDensityYAML)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying both configs have their custom options")
+			Eventually(func(g Gomega) {
+				// Verify load-aware options
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "load-aware-rebalancing",
+					"-o", "jsonpath={.spec.options.loadAware.deschedulingIntervalSeconds}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("120"))
+
+				// Verify virt-higher-density options
+				cmd = exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "jsonpath={.spec.options.virtHigherDensity.enableSwap}")
+				output, err = utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("true"))
+			}).Should(Succeed())
+		})
+	})
 })
 
 // Helper functions
