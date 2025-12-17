@@ -693,8 +693,14 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 	logger.V(1).Info("No drift detected, configuration is in sync")
 
 	// Ensure phase-related conditions are properly set even when staying in Completed phase
-	// This handles the case where we're already in Completed phase but conditions are stale
+	return r.ensureCompletedPhaseConditions(ctx, configPlan)
+}
+
+// ensureCompletedPhaseConditions updates stale conditions when staying in Completed phase
+func (r *VirtPlatformConfigReconciler) ensureCompletedPhaseConditions(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
+	logger := log.FromContext(ctx)
 	needsUpdate := false
+
 	for i, c := range configPlan.Status.Conditions {
 		switch c.Type {
 		case ConditionTypeDrifted:

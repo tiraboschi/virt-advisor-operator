@@ -31,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -193,7 +194,16 @@ func main() {
 	}
 
 	// Check which CRDs are missing at startup and mark them
-	checker := discovery.NewCRDChecker(mgr.GetClient())
+	// IMPORTANT: We need a non-cached client because the manager's cache hasn't started yet
+	directClient, err := client.New(mgr.GetConfig(), client.Options{
+		Scheme: mgr.GetScheme(),
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to create direct client for prerequisite checking")
+		os.Exit(1)
+	}
+
+	checker := discovery.NewCRDChecker(directClient)
 	for _, profileName := range profiles.DefaultRegistry.List() {
 		profile, err := profiles.DefaultRegistry.Get(profileName)
 		if err != nil {
