@@ -105,6 +105,7 @@ const (
 	MessageDriftDetected             = "Configuration has drifted from desired state"
 	MessageIgnored                   = "Configuration is ignored - no management actions will be performed. Resources remain in their current state and are now under manual control. Change action to 'DryRun' or 'Apply' to resume operator management."
 	MessageNotIgnored                = "Configuration is being managed"
+	MessageNotApplicableIgnored      = "Not applicable - configuration is ignored"
 )
 
 // VirtPlatformConfigReconciler reconciles a VirtPlatformConfig object
@@ -126,6 +127,8 @@ type VirtPlatformConfigReconciler struct {
 //
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
+//
+//nolint:gocognit // Reconcile is inherently complex due to state machine logic
 func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -227,6 +230,19 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 				"currentGeneration", configPlan.Generation)
 			err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Retrying after spec change")
 		} else {
+			// Check if prerequisites are now available (may have been installed since last check)
+			logger.V(1).Info("Checking if prerequisites are now available")
+			profile, profileErr := profiles.DefaultRegistry.Get(configPlan.Spec.Profile)
+			if profileErr == nil {
+				checker := discovery.NewCRDChecker(r.Client)
+				missing, checkErr := checker.CheckPrerequisites(ctx, profile.GetPrerequisites())
+				if checkErr == nil && len(missing) == 0 {
+					// Prerequisites are now available! Reset to Pending to regenerate plan
+					logger.Info("Prerequisites now available, retrying plan generation")
+					err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Prerequisites now available")
+					return ctrl.Result{}, err
+				}
+			}
 			// Prerequisites still missing, check periodically
 			logger.Info("Prerequisites not met, will retry periodically")
 			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
@@ -444,17 +460,25 @@ func (r *VirtPlatformConfigReconciler) checkOptimisticLock(ctx context.Context, 
 	currentHash, err := plan.ComputeCurrentStateHash(ctx, r.Client, configPlan.Status.Items)
 	if err != nil {
 		logger.Error(err, "Failed to compute current state hash for optimistic locking check")
-		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseFailed,
-			fmt.Sprintf("Failed to verify cluster state before execution: %v", err))
+		if updateErr := r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseFailed,
+			fmt.Sprintf("Failed to verify cluster state before execution: %v", err)); updateErr != nil {
+			return updateErr
+		}
+		// Return an error to stop further execution even if phase update succeeded
+		return fmt.Errorf("hash computation failed - execution aborted: %w", err)
 	}
 
 	if currentHash != configPlan.Status.SourceSnapshotHash {
 		logger.Info("Plan is stale! Target resources have been modified since plan generation",
 			"stored_hash", configPlan.Status.SourceSnapshotHash,
 			"current_hash", currentHash)
-		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseFailed,
+		if err := r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseFailed,
 			"Plan is stale: target resources have been modified since plan generation. "+
-				"Please regenerate the plan by changing action to DryRun, then review and re-approve.")
+				"Please regenerate the plan by changing action to DryRun, then review and re-approve."); err != nil {
+			return err
+		}
+		// Return an error to stop further execution even if phase update succeeded
+		return fmt.Errorf("plan is stale - execution aborted to prevent applying outdated configuration")
 	}
 
 	logger.V(1).Info("Optimistic lock verification passed - cluster state unchanged")
@@ -965,79 +989,9 @@ func (r *VirtPlatformConfigReconciler) updatePhase(ctx context.Context, configPl
 		configPlan.Status.Conditions = append(configPlan.Status.Conditions, condition)
 	}
 
-	// Manage phase-related conditions based on phase transitions
-	switch newPhase {
-	case advisorv1alpha1.PlanPhasePending:
-		// Pending phase - typically after exiting Ignored or resetting
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-
-	case advisorv1alpha1.PlanPhaseDrafting:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionTrue, ReasonDrafting, MessageDrafting)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
-
-	case advisorv1alpha1.PlanPhaseReviewRequired:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedNotYetApplied)
-		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
-		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionTrue, ReasonReviewRequired, MessageReviewRequired)
-
-	case advisorv1alpha1.PlanPhaseInProgress:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionTrue, ReasonInProgress, MessageInProgress)
-
-	case advisorv1alpha1.PlanPhaseCompleted:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonCompleted, MessageCompletedSuccess)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
-		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonCompleted, MessageCompletedSuccess)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompleted)
-		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionTrue, ReasonCompleted, MessageCompletedSuccess)
-
-	case advisorv1alpha1.PlanPhaseDrifted:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonDriftDetected, MessageDriftDetected)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
-		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonDriftDetected, MessageDriftDetected)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressDrifted)
-		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionTrue, ReasonDriftDetected, MessageDriftDetected)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonConfigurationDrifted, MessageCompletedDrifted)
-
-	case advisorv1alpha1.PlanPhaseCompletedWithErrors:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
-		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompletedErr)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
-
-	case advisorv1alpha1.PlanPhaseFailed:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonFailed, MessageCompletedFailed)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingFailed)
-		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonFailed, MessageCompletedFailed)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressFailed)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonFailed, MessageCompletedFailed)
-
-	case advisorv1alpha1.PlanPhasePrerequisiteFailed:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonPrerequisitesFailed, MessageCompletedPrereqFailed)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDraftingPrereqFail)
-		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonPrerequisitesFailed, MessageCompletedPrereqFailed)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressPrereqFail)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonPrerequisitesFailed, MessageCompletedPrereqFailed)
-
-	case advisorv1alpha1.PlanPhaseIgnored:
-		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionTrue, ReasonIgnored, MessageIgnored)
-		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-	}
+	// Set all phase-related conditions using the declarative helper method
+	// Pass the custom message for error states (Failed, PrerequisiteFailed)
+	r.setPhaseConditions(configPlan, newPhase, message)
 
 	return r.Status().Update(ctx, configPlan)
 }
@@ -1066,6 +1020,119 @@ func (r *VirtPlatformConfigReconciler) setCondition(configPlan *advisorv1alpha1.
 	}
 	if !found {
 		configPlan.Status.Conditions = append(configPlan.Status.Conditions, condition)
+	}
+}
+
+// clearAllErrorConditions sets all error-related conditions to False
+func (r *VirtPlatformConfigReconciler) clearAllErrorConditions(configPlan *advisorv1alpha1.VirtPlatformConfig, reason, message string) {
+	r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionFalse, reason, message)
+	r.setCondition(configPlan, ConditionTypeFailed, metav1.ConditionFalse, reason, message)
+}
+
+// clearAllActiveConditions sets all active/in-progress conditions to False
+func (r *VirtPlatformConfigReconciler) clearAllActiveConditions(configPlan *advisorv1alpha1.VirtPlatformConfig, reason, message string) {
+	r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, reason, message)
+	r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, reason, message)
+	r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, reason, message)
+}
+
+// clearAllCompletionConditions sets all completion-related conditions to False
+func (r *VirtPlatformConfigReconciler) clearAllCompletionConditions(configPlan *advisorv1alpha1.VirtPlatformConfig, reason, message string) {
+	r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, reason, message)
+	r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, reason, message)
+}
+
+// setPhaseConditions sets all conditions for a given phase in a declarative way
+// customMessage is used for error states (Failed, PrerequisiteFailed) to preserve detailed error information
+func (r *VirtPlatformConfigReconciler) setPhaseConditions(configPlan *advisorv1alpha1.VirtPlatformConfig, phase advisorv1alpha1.PlanPhase, customMessage string) {
+	switch phase {
+	case advisorv1alpha1.PlanPhasePending:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.clearAllActiveConditions(configPlan, ReasonNotIgnored, MessageNotIgnored)
+		r.clearAllCompletionConditions(configPlan, ReasonNotIgnored, MessageNotIgnored)
+		r.clearAllErrorConditions(configPlan, ReasonNotIgnored, MessageNotIgnored)
+
+	case advisorv1alpha1.PlanPhaseDrafting:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionTrue, ReasonDrafting, MessageDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
+		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.clearAllCompletionConditions(configPlan, ReasonNotDrafting, MessageNotDrafting)
+		r.clearAllErrorConditions(configPlan, ReasonNotDrafting, MessageNotDrafting)
+
+	case advisorv1alpha1.PlanPhaseReviewRequired:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgress)
+		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionTrue, ReasonReviewRequired, MessageReviewRequired)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedNotYetApplied)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
+		r.clearAllErrorConditions(configPlan, ReasonReviewRequired, MessageReviewRequired)
+
+	case advisorv1alpha1.PlanPhaseInProgress:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionTrue, ReasonInProgress, MessageInProgress)
+		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonInProgress, MessageInProgress)
+		r.clearAllCompletionConditions(configPlan, ReasonInProgress, MessageInProgress)
+		r.clearAllErrorConditions(configPlan, ReasonInProgress, MessageInProgress)
+
+	case advisorv1alpha1.PlanPhaseCompleted:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonCompleted, MessageCompletedSuccess)
+		r.clearAllActiveConditions(configPlan, ReasonCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionTrue, ReasonCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
+		r.clearAllErrorConditions(configPlan, ReasonCompleted, MessageCompletedSuccess)
+
+	case advisorv1alpha1.PlanPhaseDrifted:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonDriftDetected, MessageDriftDetected)
+		r.clearAllActiveConditions(configPlan, ReasonDriftDetected, MessageDriftDetected)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionTrue, ReasonDriftDetected, MessageDriftDetected)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonConfigurationDrifted, MessageCompletedDrifted)
+		r.clearAllErrorConditions(configPlan, ReasonDriftDetected, MessageDriftDetected)
+
+	case advisorv1alpha1.PlanPhaseCompletedWithErrors:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
+		r.clearAllActiveConditions(configPlan, ReasonCompletedWithErrors, MessageCompletedWithErrors)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
+		r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
+		// Note: Failed condition is NOT cleared here - CompletedWithErrors is a partial failure state
+
+	case advisorv1alpha1.PlanPhaseFailed:
+		// Use customMessage if provided, otherwise use default
+		failedMessage := MessageCompletedFailed
+		if customMessage != "" {
+			failedMessage = customMessage
+		}
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonFailed, failedMessage)
+		r.clearAllActiveConditions(configPlan, ReasonFailed, failedMessage)
+		r.clearAllCompletionConditions(configPlan, ReasonFailed, failedMessage)
+		r.setCondition(configPlan, ConditionTypeFailed, metav1.ConditionTrue, ReasonFailed, failedMessage)
+		r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionFalse, ReasonFailed, failedMessage)
+
+	case advisorv1alpha1.PlanPhasePrerequisiteFailed:
+		// Use customMessage if provided, otherwise use default
+		prereqMessage := MessageCompletedPrereqFailed
+		if customMessage != "" {
+			prereqMessage = customMessage
+		}
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonPrerequisitesFailed, prereqMessage)
+		r.clearAllActiveConditions(configPlan, ReasonPrerequisitesFailed, prereqMessage)
+		r.clearAllCompletionConditions(configPlan, ReasonPrerequisitesFailed, prereqMessage)
+		r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionTrue, ReasonPrerequisitesFailed, prereqMessage)
+		r.setCondition(configPlan, ConditionTypeFailed, metav1.ConditionFalse, ReasonPrerequisitesFailed, prereqMessage)
+
+	case advisorv1alpha1.PlanPhaseIgnored:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionTrue, ReasonIgnored, MessageIgnored)
+		r.clearAllActiveConditions(configPlan, ReasonIgnored, MessageNotApplicableIgnored)
+		r.clearAllCompletionConditions(configPlan, ReasonIgnored, MessageNotApplicableIgnored)
+		r.clearAllErrorConditions(configPlan, ReasonIgnored, MessageNotApplicableIgnored)
 	}
 }
 
