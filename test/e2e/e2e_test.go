@@ -20,8 +20,10 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -189,60 +191,16 @@ var _ = Describe("Manager", Ordered, func() {
 
 			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
 
-			By("creating the curl-metrics pod to access the metrics endpoint")
-			// Delete the pod if it exists from a previous test run
-			deletePodCmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace, "--ignore-not-found=true")
-			_, _ = utils.Run(deletePodCmd) // Ignore errors if it doesn't exist
+			By("fetching metrics using kubectl port-forward")
+			metricsOutput, err := getMetricsViaPortForward()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(metricsOutput).NotTo(BeEmpty(), "Metrics output should not be empty")
 
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
-				"--namespace", namespace,
-				"--image=curlimages/curl:latest",
-				"--overrides",
-				fmt.Sprintf(`{
-					"spec": {
-						"containers": [{
-							"name": "curl",
-							"image": "curlimages/curl:latest",
-							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
-							"securityContext": {
-								"readOnlyRootFilesystem": true,
-								"allowPrivilegeEscalation": false,
-								"capabilities": {
-									"drop": ["ALL"]
-								},
-								"runAsNonRoot": true,
-								"runAsUser": 1000,
-								"seccompProfile": {
-									"type": "RuntimeDefault"
-								}
-							}
-						}],
-						"serviceAccountName": "%s"
-					}
-				}`, token, metricsServiceName, namespace, serviceAccountName))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
-
-			By("waiting for the curl-metrics pod to complete.")
-			verifyCurlUp := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
-					"-o", "jsonpath={.status.phase}",
-					"-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod in wrong status")
-			}
-			Eventually(verifyCurlUp, 5*time.Minute).Should(Succeed())
-
-			By("getting the metrics by checking curl-metrics logs")
-			verifyMetricsAvailable := func(g Gomega) {
-				metricsOutput, err := getMetricsOutput()
-				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-				g.Expect(metricsOutput).NotTo(BeEmpty())
-				g.Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
-			}
-			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
+			// Verify metrics contain expected controller-runtime metrics
+			Expect(metricsOutput).To(Or(
+				ContainSubstring("controller_runtime_reconcile"),
+				ContainSubstring("workqueue_"),
+			), "Should contain controller-runtime or workqueue metrics")
 		})
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
@@ -250,8 +208,8 @@ var _ = Describe("Manager", Ordered, func() {
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
 		// Consider applying sample/CR(s) and check their status and/or verifying
 		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
+		// metricsOutput, err := getMetricsViaPortForward()
+		// Expect(err).NotTo(HaveOccurred(), "Failed to fetch metrics via port-forward")
 		// Expect(metricsOutput).To(ContainSubstring(
 		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
 		//    strings.ToLower(<Kind>),
@@ -300,11 +258,70 @@ func serviceAccountToken() (string, error) {
 	return out, err
 }
 
-// getMetricsOutput retrieves and returns the logs from the curl pod used to access the metrics endpoint.
-func getMetricsOutput() (string, error) {
-	By("getting the curl-metrics logs")
-	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
-	return utils.Run(cmd)
+// getMetricsViaPortForward fetches metrics using kubectl port-forward.
+func getMetricsViaPortForward() (string, error) {
+	By("setting up port-forward to metrics service")
+
+	// Get the controller pod name
+	cmd := exec.Command("kubectl", "get", "pods", "-n", namespace,
+		"-l", "control-plane=controller-manager",
+		"-o", "jsonpath={.items[0].metadata.name}")
+	podName, err := utils.Run(cmd)
+	if err != nil || podName == "" {
+		return "", fmt.Errorf("failed to get controller pod name: %w", err)
+	}
+
+	// Start port-forward in the background
+	// Use a context to ensure the port-forward process is cleaned up
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Find an available local port
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", fmt.Errorf("failed to find available port: %w", err)
+	}
+	localPort := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	// Start kubectl port-forward
+	portForwardCmd := exec.CommandContext(ctx, "kubectl", "port-forward",
+		"-n", namespace,
+		fmt.Sprintf("pod/%s", podName),
+		fmt.Sprintf("%d:8443", localPort))
+
+	// Start the port-forward process
+	if err := portForwardCmd.Start(); err != nil {
+		return "", fmt.Errorf("failed to start port-forward: %w", err)
+	}
+
+	// Ensure cleanup
+	defer func() {
+		if portForwardCmd.Process != nil {
+			portForwardCmd.Process.Kill()
+		}
+	}()
+
+	// Wait for port-forward to be ready
+	time.Sleep(2 * time.Second)
+
+	// Get service account token for authentication
+	token, err := serviceAccountToken()
+	if err != nil {
+		return "", fmt.Errorf("failed to get service account token: %w", err)
+	}
+
+	// Fetch metrics using curl
+	curlCmd := exec.Command("curl", "-s", "-k",
+		"-H", fmt.Sprintf("Authorization: Bearer %s", token),
+		fmt.Sprintf("https://127.0.0.1:%d/metrics", localPort))
+
+	output, err := curlCmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch metrics: %w, output: %s", err, string(output))
+	}
+
+	return string(output), nil
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,

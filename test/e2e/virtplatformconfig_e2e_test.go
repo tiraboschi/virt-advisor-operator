@@ -304,59 +304,8 @@ spec:
 			// Wait for at least one reconciliation
 			time.Sleep(10 * time.Second)
 
-			By("creating curl-metrics pod to fetch metrics")
-			// First get a service account token
-			token, err := serviceAccountToken()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(token).NotTo(BeEmpty())
-
-			// Delete the pod if it exists from a previous test
-			deletePodCmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", "openshift-cnv", "--ignore-not-found=true")
-			_, _ = utils.Run(deletePodCmd)
-
-			// Create the curl-metrics pod
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
-				"--namespace", "openshift-cnv",
-				"--image=curlimages/curl:latest",
-				"--overrides",
-				fmt.Sprintf(`{
-					"spec": {
-						"containers": [{
-							"name": "curl",
-							"image": "curlimages/curl:latest",
-							"command": ["/bin/sh", "-c"],
-							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://virt-advisor-operator-controller-manager-metrics-service.openshift-cnv.svc.cluster.local:8443/metrics"],
-							"securityContext": {
-								"readOnlyRootFilesystem": true,
-								"allowPrivilegeEscalation": false,
-								"capabilities": {
-									"drop": ["ALL"]
-								},
-								"runAsNonRoot": true,
-								"runAsUser": 1000,
-								"seccompProfile": {
-									"type": "RuntimeDefault"
-								}
-							}
-						}],
-						"serviceAccountName": "virt-advisor-operator-controller-manager"
-					}
-				}`, token))
-			_, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
-
-			By("waiting for curl-metrics pod to complete")
-			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "pods", "curl-metrics",
-					"-o", "jsonpath={.status.phase}",
-					"-n", "openshift-cnv")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(Equal("Succeeded"), "curl pod should succeed")
-			}, 2*time.Minute).Should(Succeed())
-
-			By("checking controller_runtime metrics for virtplatformconfig controller")
-			metricsOutput, err := getMetricsOutput()
+			By("fetching metrics using kubectl port-forward")
+			metricsOutput, err := getMetricsViaPortForward()
 			Expect(err).NotTo(HaveOccurred())
 
 			// Look for reconciliation metrics  - be flexible as metrics format may vary
@@ -371,10 +320,6 @@ spec:
 				ContainSubstring("virtplatformconfig"),
 				ContainSubstring("VirtPlatformConfig"),
 			), "Metrics should reference the VirtPlatformConfig controller")
-
-			By("cleaning up curl-metrics pod")
-			cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", "openshift-cnv", "--ignore-not-found=true")
-			_, _ = utils.Run(cmd)
 		})
 	})
 
