@@ -386,10 +386,10 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
 	}
 
-	// Determine impact severity based on effect-based validation
+	// Determine impact based on effect-based validation
 	// Check if PSI is already effective in the merged MachineConfigPool config
 	poolName := "worker"
-	impactSeverity := "High - Node reboot required for kernel arguments"
+	impact := advisorv1alpha1.ImpactHigh
 	message := fmt.Sprintf("MachineConfig '%s' will be configured to enable PSI metrics", mcName)
 
 	// EFFECT-BASED VALIDATION: Check if PSI is already effective in the pool
@@ -399,7 +399,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 		log.FromContext(ctx).V(1).Info("Could not validate kernel arg in pool", "pool", poolName, "error", err)
 	} else if isPresent {
 		// PSI is already effective in the merged config - no reboot needed
-		impactSeverity = "None - PSI metrics already enabled in pool"
+		impact = advisorv1alpha1.ImpactLow
 		message = fmt.Sprintf("PSI metrics already effective in MachineConfigPool '%s'", poolName)
 	}
 
@@ -407,7 +407,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 	return NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
 		ForResource(desired, "enable-psi-metrics").
 		WithManagedFields([]string{"spec.kernelArguments"}).
-		WithImpactSeverity(impactSeverity).
+		WithImpact(impact).
 		WithMessage(message).
 		Build()
 }
@@ -425,6 +425,11 @@ func (p *LoadAwareRebalancingProfile) GetCategory() string {
 // GetImpactSummary returns a summary of the impact of enabling this profile
 func (p *LoadAwareRebalancingProfile) GetImpactSummary() string {
 	return "Medium - May require node reboots if PSI metrics are enabled"
+}
+
+// GetImpactLevel returns the aggregate risk level
+func (p *LoadAwareRebalancingProfile) GetImpactLevel() advisorv1alpha1.Impact {
+	return advisorv1alpha1.ImpactMedium
 }
 
 // IsAdvertisable returns true since this is a production profile

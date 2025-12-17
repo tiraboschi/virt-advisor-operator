@@ -160,6 +160,11 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	// Resources remain in their current state, and the cluster admin assumes manual control.
 	// We simply stop all reconciliation (no drift detection, no plan generation, no apply).
 	if configPlan.Spec.Action == advisorv1alpha1.PlanActionIgnore {
+		// Set impact level in status even for ignored configs (needed for kubectl display)
+		if err := r.ensureImpactLevel(ctx, configPlan); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		if configPlan.Status.Phase != advisorv1alpha1.PlanPhaseIgnored {
 			logger.Info("Action is Ignore, transitioning to Ignored phase")
 			return ctrl.Result{}, r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseIgnored,
@@ -239,6 +244,67 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 	return ctrl.Result{}, nil
 }
 
+// compareImpactLevels returns true if level1 is worse (higher) than level2
+func compareImpactLevels(level1, level2 advisorv1alpha1.Impact) bool {
+	severity := map[advisorv1alpha1.Impact]int{
+		advisorv1alpha1.ImpactLow:    1,
+		advisorv1alpha1.ImpactMedium: 2,
+		advisorv1alpha1.ImpactHigh:   3,
+	}
+	return severity[level1] > severity[level2]
+}
+
+// aggregateImpactFromItems computes the worst impact level from all plan items
+func aggregateImpactFromItems(items []advisorv1alpha1.VirtPlatformConfigItem) advisorv1alpha1.Impact {
+	if len(items) == 0 {
+		return ""
+	}
+
+	worstImpact := advisorv1alpha1.ImpactLow
+	for _, item := range items {
+		if item.ImpactSeverity == "" {
+			continue
+		}
+		if compareImpactLevels(item.ImpactSeverity, worstImpact) {
+			worstImpact = item.ImpactSeverity
+		}
+	}
+	return worstImpact
+}
+
+// ensureImpactLevel updates the impact level in status based on plan items.
+// If items exist, aggregates the worst impact from them.
+// If no items yet, falls back to profile-level impact.
+func (r *VirtPlatformConfigReconciler) ensureImpactLevel(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
+	logger := log.FromContext(ctx)
+
+	var impactLevel advisorv1alpha1.Impact
+
+	// If we have plan items, compute impact from them
+	if len(configPlan.Status.Items) > 0 {
+		impactLevel = aggregateImpactFromItems(configPlan.Status.Items)
+		logger.V(1).Info("Computed impact from plan items", "impact", impactLevel, "itemCount", len(configPlan.Status.Items))
+	} else {
+		// No items yet - fall back to profile-level impact
+		profile, err := profiles.DefaultRegistry.Get(configPlan.Spec.Profile)
+		if err != nil {
+			// Profile not found - skip impact update (will fail later in drafting phase)
+			return nil
+		}
+		impactLevel = profile.GetImpactLevel()
+		logger.V(1).Info("Using profile-level impact (no items yet)", "impact", impactLevel)
+	}
+
+	if configPlan.Status.ImpactSeverity != impactLevel {
+		configPlan.Status.ImpactSeverity = impactLevel
+		if err := r.Status().Update(ctx, configPlan); err != nil {
+			logger.Error(err, "Failed to update impact level in status")
+			return err
+		}
+	}
+	return nil
+}
+
 // handlePendingPhase initializes a new VirtPlatformConfig
 func (r *VirtPlatformConfigReconciler) handlePendingPhase(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
@@ -313,6 +379,11 @@ func (r *VirtPlatformConfigReconciler) handleDraftingPhase(ctx context.Context, 
 
 	if err := r.Status().Update(ctx, configPlan); err != nil {
 		return fmt.Errorf("failed to update status with plan items: %w", err)
+	}
+
+	// Compute and set impact level from generated plan items
+	if err := r.ensureImpactLevel(ctx, configPlan); err != nil {
+		return err
 	}
 
 	// Move to ReviewRequired phase (for DryRun) or InProgress (for Apply)

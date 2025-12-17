@@ -75,7 +75,7 @@ func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client,
 				Name:       "example-config",
 				Namespace:  "default",
 			},
-			ImpactSeverity: "Low",
+			ImpactSeverity: advisorv1alpha1.ImpactLow,
 			State:          advisorv1alpha1.ItemStatePending,
 			Message:        "Waiting to apply configuration",
 		},
@@ -97,6 +97,11 @@ func (p *ExampleProfile) GetCategory() string {
 // GetImpactSummary returns a summary of the impact of enabling this profile
 func (p *ExampleProfile) GetImpactSummary() string {
 	return "None - Example profile with no real resources"
+}
+
+// GetImpactLevel returns the aggregate risk level
+func (p *ExampleProfile) GetImpactLevel() advisorv1alpha1.Impact {
+	return advisorv1alpha1.ImpactLow
 }
 
 // IsAdvertisable returns false since this is an example profile

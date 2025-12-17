@@ -72,6 +72,11 @@ type Profile interface {
 	// Used for profile advertising annotations.
 	GetImpactSummary() string
 
+	// GetImpactLevel returns the aggregate risk level for kubectl output.
+	// Used in VirtPlatformConfig status.impact field for kubectl get display.
+	// Returns the enum value from advisorv1alpha1.Impact (Low, Medium, High).
+	GetImpactLevel() advisorv1alpha1.Impact
+
 	// IsAdvertisable returns true if this profile should be auto-created as a
 	// VirtPlatformConfig with action=Ignore on operator startup for discoverability.
 	// Returns false for example/dev/internal profiles.

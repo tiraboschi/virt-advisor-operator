@@ -252,14 +252,13 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			// Both resources don't exist yet, so should indicate creation
+			// Both resources don't exist yet, so should have impact set
 			for _, item := range items {
 				Expect(item.ImpactSeverity).NotTo(BeEmpty())
 			}
 
 			mcItem := items[1]
-			Expect(mcItem.ImpactSeverity).To(ContainSubstring("High"), "MachineConfig requires node reboot")
-			Expect(mcItem.ImpactSeverity).To(ContainSubstring("reboot"), "should mention reboot requirement")
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh), "MachineConfig requires node reboot")
 		})
 	})
 
@@ -776,7 +775,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem).NotTo(BeNil(), "MachineConfig item should be generated")
 
 			// Verify effect-based validation detected PSI is already present
-			Expect(mcItem.ImpactSeverity).To(Equal("None - PSI metrics already enabled in pool"))
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactLow))
 			Expect(mcItem.Message).To(ContainSubstring("PSI metrics already effective"))
 			Expect(mcItem.Message).To(ContainSubstring(workerPoolName))
 
@@ -836,7 +835,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem).NotTo(BeNil())
 
 			// Verify PSI is NOT detected, so reboot is required
-			Expect(mcItem.ImpactSeverity).To(Equal("High - Node reboot required for kernel arguments"))
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh))
 			Expect(mcItem.Message).To(ContainSubstring("will be configured to enable PSI metrics"))
 
 			// Cleanup
@@ -893,7 +892,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem).NotTo(BeNil())
 
 			// Last occurrence is psi=1, so it should be detected as already effective
-			Expect(mcItem.ImpactSeverity).To(Equal("None - PSI metrics already enabled in pool"))
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactLow))
 
 			// Cleanup
 			Expect(integrationK8sClient.Delete(integrationCtx, pool)).To(Succeed())
@@ -949,7 +948,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem).NotTo(BeNil())
 
 			// Last occurrence is psi=0, so psi=1 is NOT effective
-			Expect(mcItem.ImpactSeverity).To(Equal("High - Node reboot required for kernel arguments"))
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh))
 
 			// Cleanup
 			Expect(integrationK8sClient.Delete(integrationCtx, pool)).To(Succeed())
@@ -975,7 +974,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem).NotTo(BeNil())
 
 			// Should default to High impact since we can't validate
-			Expect(mcItem.ImpactSeverity).To(Equal("High - Node reboot required for kernel arguments"))
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh))
 		})
 	})
 })

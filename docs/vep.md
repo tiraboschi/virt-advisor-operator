@@ -70,9 +70,9 @@ Instead of reading documentation or inspecting CRD schemas, admins can simply:
 ```bash
 # Discover all available profiles
 $ kubectl get virtplatformconfig
-NAME                      PROFILE                   ACTION   PHASE     AGE
-load-aware-rebalancing    load-aware-rebalancing    Ignore   Ignored   5m
-high-density-swap         high-density-swap         Ignore   Ignored   5m
+NAME                      ACTION   IMPACT   PHASE     AGE
+load-aware-rebalancing    Ignore   Medium   Ignored   5m
+virt-higher-density       Ignore   High     Ignored   5m
 
 # Inspect a profile's details via annotations
 $ kubectl get virtplatformconfig load-aware-rebalancing -o yaml
@@ -157,7 +157,7 @@ status:
   items:
     - name: "enable-psi-metrics"
       # Plan Data (Calculated in DryRun)
-      impactSeverity: High
+      impactSeverity: High  # Enum: Low | Medium | High
       diff: |
         + apiVersion: machineconfiguration.openshift.io/v1...
 
@@ -370,7 +370,7 @@ status:
     targetRef:
       kind: KubeDescheduler
       name: cluster
-    impactSeverity: None
+    impactSeverity: Low  # Enum: Low | Medium | High
     diff: |
       apiVersion: operator.openshift.io/v1
       kind: KubeDescheduler
@@ -397,7 +397,7 @@ status:
     targetRef:
       kind: MachineConfig
       name: 99-worker-psi-karg
-    impactSeverity: High (Reboot Required)
+    impactSeverity: High  # Node reboot required
     diff: |
     + apiVersion: machineconfiguration.openshift.io/v1
     + kind: MachineConfig
@@ -523,6 +523,7 @@ type Profile interface {
     GetDescription() string        // Human-readable one-line description
     GetCategory() string            // e.g., "scheduling", "performance", "storage", "networking"
     GetImpactSummary() string      // e.g., "Medium - May require node reboots", "Low - Configuration only"
+    GetImpactLevel() Impact         // Ordered enum: Low | Medium | High (for kubectl display)
     GetDocumentationURL() string   // Link to detailed docs
     IsAdvertisable() bool          // false for example/dev/internal profiles
 }
@@ -630,10 +631,84 @@ func (p *LoadAwareProfile) IsAdvertisable() bool {
     return true // This is a real profile, not an example
 }
 
+func (p *LoadAwareProfile) GetImpactLevel() Impact {
+    return ImpactMedium
+}
+
 // ... existing methods (GetPrerequisites, Validate, GeneratePlanItems, etc.)
 ```
 
-### 4. Handling Missing Dependencies in `VirtPlatformConfig`
+### 4. Impact Enum & Risk Assessment
+
+To provide at-a-glance risk assessment in `kubectl get` output and help users make informed decisions, the API uses a strongly-typed `Impact` enum to categorize the risk level of configuration changes.
+
+**Type Definition:**
+
+```go
+// Impact represents the risk level of a configuration change.
+// The values are ordered by severity: Low < Medium < High.
+// +kubebuilder:validation:Enum=Low;Medium;High
+type Impact string
+
+const (
+    ImpactLow    Impact = "Low"     // Minimal risk, no service disruption
+    ImpactMedium Impact = "Medium"   // Moderate risk, careful timing recommended
+    ImpactHigh   Impact = "High"     // Significant risk, typically requires node reboots
+)
+```
+
+**Usage in API:**
+
+1. **Per-Item Impact** (`VirtPlatformConfigItem.impactSeverity`): Each plan item declares its risk level. Examples:
+   - `Low`: Updating an existing KubeDescheduler configuration
+   - `Medium`: Creating a new resource that doesn't require reboots
+   - `High`: MachineConfig changes requiring node reboots
+
+2. **Aggregate Impact** (`VirtPlatformConfigStatus.impactSeverity`): The status displays the **worst (highest) impact** across all plan items. This provides users with immediate visibility into the overall risk in `kubectl get` output.
+
+**kubectl Output:**
+
+```bash
+$ kubectl get virtplatformconfigs
+NAME                     ACTION   IMPACT   PHASE            AGE
+load-aware-rebalancing   DryRun   High     ReviewRequired   5m
+virt-higher-density      Ignore   High     Ignored          5m
+```
+
+**Aggregation Logic:**
+
+The controller computes the aggregate impact by finding the maximum severity across all items:
+
+```go
+func aggregateImpactFromItems(items []VirtPlatformConfigItem) Impact {
+    worstImpact := ImpactLow
+    for _, item := range items {
+        if compareImpact(item.Impact, worstImpact) {
+            worstImpact = item.Impact
+        }
+    }
+    return worstImpact
+}
+```
+
+**Dynamic Impact Calculation:**
+
+Impact is computed dynamically based on the actual plan items, not static profile metadata. This means:
+
+- **Load-aware with PSI enabled**: Impact = `High` (MachineConfig + Descheduler)
+- **Load-aware with PSI disabled** (`enablePSIMetrics: false`): Impact = `Low` (Descheduler only)
+
+This dynamic approach ensures the Impact column accurately reflects the current configuration's risk.
+
+**Benefits:**
+
+- ✅ **Type Safety**: Compile-time validation prevents typos
+- ✅ **Ordered Enum**: Clear severity ordering (Low < Medium < High)
+- ✅ **kubectl Display**: At-a-glance risk assessment via printer columns
+- ✅ **Dynamic**: Reflects actual plan items, not theoretical capabilities
+- ✅ **Decision Support**: Helps users prioritize reviews and schedule maintenance windows
+
+### 5. Handling Missing Dependencies in `VirtPlatformConfig`
 If a soft dependency is missing or incompatible, the `VirtPlatformConfig` must gracefully halt to avoid crashing the controller.
 
 **State Transitions:**

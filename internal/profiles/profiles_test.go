@@ -48,6 +48,10 @@ func (m *mockProfile) GetImpactSummary() string {
 	return "None - Testing only"
 }
 
+func (m *mockProfile) GetImpactLevel() advisorv1alpha1.Impact {
+	return advisorv1alpha1.ImpactLow
+}
+
 func (m *mockProfile) IsAdvertisable() bool {
 	return false
 }

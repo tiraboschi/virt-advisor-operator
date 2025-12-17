@@ -196,6 +196,22 @@ const (
 	ItemStateFailed     ItemState = "Failed"
 )
 
+// Impact represents the risk level of a configuration change.
+// The values are ordered by severity: Low < Medium < High.
+// +kubebuilder:validation:Enum=Low;Medium;High
+type Impact string
+
+const (
+	// ImpactLow indicates minimal risk with no service disruption.
+	ImpactLow Impact = "Low"
+
+	// ImpactMedium indicates moderate risk, may require careful timing.
+	ImpactMedium Impact = "Medium"
+
+	// ImpactHigh indicates significant risk, typically requires node reboots or extended rollout periods.
+	ImpactHigh Impact = "High"
+)
+
 // VirtPlatformConfigItem represents a single unit of work (e.g., one Descheduler patch).
 type VirtPlatformConfigItem struct {
 	// Name is a human-readable identifier for this step (e.g., "enable-psi-metrics").
@@ -204,8 +220,9 @@ type VirtPlatformConfigItem struct {
 	// TargetRef identifies the specific resource being acted upon.
 	TargetRef ObjectReference `json:"targetRef"`
 
-	// ImpactSeverity indicates the risk level (e.g., "None", "High (Reboot)").
-	ImpactSeverity string `json:"impactSeverity,omitempty"`
+	// ImpactSeverity indicates the risk level of this configuration change.
+	// +optional
+	ImpactSeverity Impact `json:"impactSeverity,omitempty"`
 
 	// Diff contains the Unified Diff (Git style) showing the proposed changes.
 	// Generated during the DryRun phase.
@@ -257,6 +274,12 @@ type VirtPlatformConfigStatus struct {
 	// Phase is the high-level summary of the plan's lifecycle.
 	Phase PlanPhase `json:"phase,omitempty"`
 
+	// ImpactSeverity indicates the aggregate risk level of this profile's changes.
+	// Computed by aggregating the worst (highest) impact from all plan items.
+	// Displayed in kubectl output for at-a-glance risk assessment.
+	// +optional
+	ImpactSeverity Impact `json:"impactSeverity,omitempty"`
+
 	// ObservedGeneration reflects the generation of the most recently observed spec.
 	// When this differs from metadata.generation, it indicates the spec has changed
 	// and the plan should be regenerated (even if currently in Failed state).
@@ -293,8 +316,8 @@ type VirtPlatformConfigStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Profile",type="string",JSONPath=".spec.profile"
 // +kubebuilder:printcolumn:name="Action",type="string",JSONPath=".spec.action"
+// +kubebuilder:printcolumn:name="Impact",type="string",JSONPath=".status.impactSeverity"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.profile",message="To ensure a singleton pattern, the VirtPlatformConfig name must exactly match the spec.profile."

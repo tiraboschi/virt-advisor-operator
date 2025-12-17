@@ -50,6 +50,11 @@ func (p *VirtHigherDensityProfile) GetImpactSummary() string {
 	return "Enables swap for kubelet to allow memory overcommit and higher VM density. Requires nodes with swap partition labeled CNV_SWAP."
 }
 
+// GetImpactLevel returns the aggregate risk level
+func (p *VirtHigherDensityProfile) GetImpactLevel() advisorv1alpha1.Impact {
+	return advisorv1alpha1.ImpactHigh
+}
+
 // IsAdvertisable indicates this profile should be auto-created for discovery
 func (p *VirtHigherDensityProfile) IsAdvertisable() bool {
 	return true
@@ -160,7 +165,7 @@ func (p *VirtHigherDensityProfile) generateSwapMachineConfigItem(ctx context.Con
 	return NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
 		ForResource(desired, "enable-kubelet-swap").
 		WithManagedFields([]string{"spec.config"}).
-		WithImpactSeverity("High - Node reboot required for swap configuration").
+		WithImpact(advisorv1alpha1.ImpactHigh).
 		WithMessage(fmt.Sprintf("MachineConfig '%s' will be configured to enable kubelet swap", mcName)).
 		Build()
 }

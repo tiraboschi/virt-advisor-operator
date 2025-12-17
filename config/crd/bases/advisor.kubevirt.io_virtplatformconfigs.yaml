@@ -15,11 +15,11 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.profile
-      name: Profile
-      type: string
     - jsonPath: .spec.action
       name: Action
+      type: string
+    - jsonPath: .status.impactSeverity
+      name: Impact
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -319,6 +319,16 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              impactSeverity:
+                description: |-
+                  ImpactSeverity indicates the aggregate risk level of this profile's changes.
+                  Computed by aggregating the worst (highest) impact from all plan items.
+                  Displayed in kubectl output for at-a-glance risk assessment.
+                enum:
+                - Low
+                - Medium
+                - High
+                type: string
               items:
                 description: Items is the ordered list of configuration steps to be
                   executed.
@@ -338,8 +348,12 @@ spec:
                         Generated during the DryRun phase.
                       type: string
                     impactSeverity:
-                      description: ImpactSeverity indicates the risk level (e.g.,
-                        "None", "High (Reboot)").
+                      description: ImpactSeverity indicates the risk level of this
+                        configuration change.
+                      enum:
+                      - Low
+                      - Medium
+                      - High
                       type: string
                     lastTransitionTime:
                       description: LastTransitionTime is the last time the state transitioned.

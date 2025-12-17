@@ -98,8 +98,7 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			mcItem := items[0]
-			Expect(mcItem.ImpactSeverity).To(ContainSubstring("High"), "MachineConfig requires node reboot")
-			Expect(mcItem.ImpactSeverity).To(ContainSubstring("reboot"), "should mention reboot requirement")
+			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh), "MachineConfig requires node reboot")
 		})
 	})
 

@@ -27,7 +27,7 @@ import (
 //	item, err := builder.
 //	    ForResource(desired, "enable-load-aware-descheduling").
 //	    WithManagedFields([]string{"spec.profiles", "spec.deschedulingIntervalSeconds"}).
-//	    WithImpactSeverity("Low - Updates existing configuration").
+//	    WithImpact(advisorv1alpha1.ImpactLow).
 //	    Build()
 type PlanItemBuilder struct {
 	ctx          context.Context
@@ -40,7 +40,7 @@ type PlanItemBuilder struct {
 
 	// Optional fields
 	managedFields  []string
-	impactSeverity string
+	impactSeverity advisorv1alpha1.Impact
 	message        string
 }
 
@@ -70,10 +70,10 @@ func (b *PlanItemBuilder) WithManagedFields(fields []string) *PlanItemBuilder {
 	return b
 }
 
-// WithImpactSeverity sets the human-readable impact description.
-// Examples: "Low - Updates existing configuration", "High - Node reboot required"
-func (b *PlanItemBuilder) WithImpactSeverity(severity string) *PlanItemBuilder {
-	b.impactSeverity = severity
+// WithImpact sets the risk level for this configuration change.
+// Use advisorv1alpha1.ImpactLow, ImpactMedium, or ImpactHigh.
+func (b *PlanItemBuilder) WithImpact(impact advisorv1alpha1.Impact) *PlanItemBuilder {
+	b.impactSeverity = impact
 	return b
 }
 
@@ -101,17 +101,17 @@ func (b *PlanItemBuilder) Build() (advisorv1alpha1.VirtPlatformConfigItem, error
 
 	gvk := b.desired.GroupVersionKind()
 
-	// Auto-determine impact severity if not set
+	// Auto-determine impact if not set
 	if b.impactSeverity == "" {
 		_, err := plan.GetUnstructured(b.ctx, b.client, gvk, b.desired.GetName(), b.desired.GetNamespace())
 		isNew := errors.IsNotFound(err)
 
 		if isNew {
-			b.impactSeverity = fmt.Sprintf("Medium - Creates new %s", gvk.Kind)
+			b.impactSeverity = advisorv1alpha1.ImpactMedium
 		} else if err != nil {
 			return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to check if resource exists: %w", err)
 		} else {
-			b.impactSeverity = fmt.Sprintf("Low - Updates existing %s", gvk.Kind)
+			b.impactSeverity = advisorv1alpha1.ImpactLow
 		}
 	}
 
