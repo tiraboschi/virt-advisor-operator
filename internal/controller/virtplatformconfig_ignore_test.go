@@ -35,10 +35,10 @@ var _ = Describe("Ignore Action Handling", func() {
 		By("creating a VirtPlatformConfig with action=Ignore")
 		vpc := &advisorv1alpha1.VirtPlatformConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-ignore",
+				Name: "example-profile",
 			},
 			Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-				Profile: "test-ignore",
+				Profile: "example-profile",
 				Action:  advisorv1alpha1.PlanActionIgnore,
 			},
 		}
@@ -49,7 +49,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying it transitioned to Ignored phase")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-ignore"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "example-profile"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored))
 
 		By("verifying Ignored condition is set")
@@ -64,10 +64,10 @@ var _ = Describe("Ignore Action Handling", func() {
 		By("creating a VirtPlatformConfig with action=Ignore")
 		vpc := &advisorv1alpha1.VirtPlatformConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-stay-ignored",
+				Name: "load-aware-rebalancing",
 			},
 			Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-				Profile: "test-stay-ignored",
+				Profile: "load-aware-rebalancing",
 				Action:  advisorv1alpha1.PlanActionIgnore,
 			},
 		}
@@ -78,7 +78,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("getting resource version after first reconciliation")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-stay-ignored"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "load-aware-rebalancing"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored))
 		firstResourceVersion := vpc.ResourceVersion
 
@@ -87,7 +87,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying status was not updated (no-op reconciliation)")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-stay-ignored"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "load-aware-rebalancing"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored))
 		// Resource version should be same since no status update occurred
 		Expect(vpc.ResourceVersion).To(Equal(firstResourceVersion))
@@ -97,10 +97,10 @@ var _ = Describe("Ignore Action Handling", func() {
 		By("creating a VirtPlatformConfig with action=Ignore")
 		vpc := &advisorv1alpha1.VirtPlatformConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-exit-ignored",
+				Name: "virt-higher-density",
 			},
 			Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-				Profile: "test-exit-ignored",
+				Profile: "virt-higher-density",
 				Action:  advisorv1alpha1.PlanActionIgnore,
 			},
 		}
@@ -111,7 +111,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying it's in Ignored phase")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-exit-ignored"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "virt-higher-density"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored))
 
 		By("changing action to DryRun")
@@ -123,7 +123,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying it exited Ignored phase and reset to Pending")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-exit-ignored"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "virt-higher-density"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhasePending))
 
 		By("verifying it's no longer in Ignored phase (condition may still exist)")
@@ -136,10 +136,10 @@ var _ = Describe("Ignore Action Handling", func() {
 		By("creating a VirtPlatformConfig with action=Ignore")
 		vpc := &advisorv1alpha1.VirtPlatformConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-exit-ignored-apply",
+				Name: "example-profile",
 			},
 			Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-				Profile: "test-exit-ignored-apply",
+				Profile: "example-profile",
 				Action:  advisorv1alpha1.PlanActionIgnore,
 			},
 		}
@@ -150,7 +150,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying it's in Ignored phase")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-exit-ignored-apply"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "example-profile"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored))
 
 		By("changing action to Apply")
@@ -162,7 +162,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying it exited Ignored phase and reset to Pending")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-exit-ignored-apply"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "example-profile"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhasePending))
 	})
 
@@ -193,10 +193,10 @@ var _ = Describe("Ignore Action Handling", func() {
 		By("creating a VirtPlatformConfig with action=Ignore")
 		vpc := &advisorv1alpha1.VirtPlatformConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-no-drift",
+				Name: "load-aware-rebalancing",
 			},
 			Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-				Profile: "test-no-drift",
+				Profile: "load-aware-rebalancing",
 				Action:  advisorv1alpha1.PlanActionIgnore,
 			},
 		}
@@ -207,7 +207,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying it's in Ignored phase")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-no-drift"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "load-aware-rebalancing"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored))
 
 		By("verifying no plan items were generated")
@@ -218,7 +218,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying phase stayed Ignored (no drift detection)")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-no-drift"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "load-aware-rebalancing"}, vpc)).To(Succeed())
 		Expect(vpc.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseIgnored),
 			"Should remain in Ignored phase - no drift detection should occur")
 
@@ -231,17 +231,17 @@ var _ = Describe("Ignore Action Handling", func() {
 		By("creating a VirtPlatformConfig with action=Ignore")
 		vpc := &advisorv1alpha1.VirtPlatformConfig{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "test-observed-gen",
+				Name: "virt-higher-density",
 			},
 			Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-				Profile: "test-observed-gen",
+				Profile: "virt-higher-density",
 				Action:  advisorv1alpha1.PlanActionIgnore,
 			},
 		}
 		Expect(k8sClient.Create(ctx, vpc)).To(Succeed())
 
 		By("getting the generation before reconciliation")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-observed-gen"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "virt-higher-density"}, vpc)).To(Succeed())
 		currentGeneration := vpc.Generation
 
 		By("reconciling")
@@ -249,7 +249,7 @@ var _ = Describe("Ignore Action Handling", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		By("verifying observedGeneration was updated")
-		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "test-observed-gen"}, vpc)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: "virt-higher-density"}, vpc)).To(Succeed())
 		Expect(vpc.Status.ObservedGeneration).To(Equal(currentGeneration),
 			"ObservedGeneration should be updated when entering Ignored phase")
 	})

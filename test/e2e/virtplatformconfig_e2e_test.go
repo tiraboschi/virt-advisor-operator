@@ -115,16 +115,14 @@ spec:
 
 	Context("DryRun Workflow", func() {
 		It("should calculate and show diffs without applying changes", func() {
-			By("creating a simple test config for a profile that doesn't exist")
-			// Note: This test uses a non-existent profile which will cause the controller
-			// to transition to PrerequisiteFailed phase, which is fine for testing DryRun mode
+			By("creating a simple test config with example-profile")
 			sampleYAML := `
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: test-dryrun
+  name: example-profile
 spec:
-  profile: test-dryrun
+  profile: example-profile
   action: DryRun
   failurePolicy: Abort
 `
@@ -135,7 +133,7 @@ spec:
 
 			By("verifying action stays DryRun and controller processes it")
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "test-dryrun",
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "example-profile",
 					"-o", "jsonpath={.spec.action}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
@@ -144,9 +142,8 @@ spec:
 
 			By("verifying the controller processes the VirtPlatformConfig")
 			Eventually(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-dryrun")
-				// Controller should process it and set a phase (either PrerequisiteFailed for invalid profile
-				// or another appropriate phase)
+				status := getVirtPlatformConfigStatus("example-profile")
+				// Controller should process it and set a phase
 				g.Expect(status.Phase).NotTo(BeEmpty(), "Controller should set a phase")
 			}).Should(Succeed())
 		})
@@ -388,9 +385,9 @@ spec:
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: wrong-name
+  name: load-aware-rebalancing
 spec:
-  profile: correct-name
+  profile: virt-higher-density
   action: DryRun
   failurePolicy: Abort
 `
@@ -410,9 +407,9 @@ spec:
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: matching-name
+  name: example-profile
 spec:
-  profile: matching-name
+  profile: example-profile
   action: DryRun
   failurePolicy: Abort
 `
@@ -421,6 +418,62 @@ spec:
 			_, err := utils.Run(cmd)
 
 			Expect(err).NotTo(HaveOccurred(), "Should accept matching name/profile")
+		})
+	})
+
+	Context("Profile Name Validation", func() {
+		It("should reject invalid profile names", func() {
+			By("attempting to create VirtPlatformConfig with invalid profile")
+			invalidYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: invalid-profile
+spec:
+  profile: invalid-profile
+  action: DryRun
+  failurePolicy: Abort
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err := cmd.CombinedOutput()
+
+			Expect(err).To(HaveOccurred(), "Should reject invalid profile name")
+			Expect(string(output)).To(Or(
+				ContainSubstring("Unsupported value"),
+				ContainSubstring("supported values"),
+			), "Error should mention invalid profile value")
+		})
+
+		It("should accept valid profile names", func() {
+			validProfiles := []string{"load-aware-rebalancing", "virt-higher-density", "example-profile"}
+
+			for _, profile := range validProfiles {
+				By(fmt.Sprintf("creating VirtPlatformConfig with profile=%s", profile))
+				validYAML := fmt.Sprintf(`
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: %s
+spec:
+  profile: %s
+  action: DryRun
+  failurePolicy: Abort
+`, profile, profile)
+
+				cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+				cmd.Stdin = strings.NewReader(validYAML)
+				_, err := utils.Run(cmd)
+
+				Expect(err).NotTo(HaveOccurred(),
+					fmt.Sprintf("Should accept valid profile: %s", profile))
+
+				// Clean up
+				cmd = exec.Command("kubectl", "delete", "virtplatformconfig", profile,
+					"--ignore-not-found=true")
+				_, _ = utils.Run(cmd)
+				time.Sleep(2 * time.Second)
+			}
 		})
 	})
 
@@ -480,31 +533,127 @@ spec:
 				g.Expect(status.Conditions).NotTo(BeEmpty(), "Controller should set conditions")
 			}).Should(Succeed())
 		})
+
+		It("should reject load-aware profile with virt-higher-density options", func() {
+			By("attempting to create load-aware profile with virtHigherDensity options")
+			invalidYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err := cmd.CombinedOutput()
+
+			Expect(err).To(HaveOccurred(), "Should reject mismatched profile options")
+			Expect(string(output)).To(Or(
+				ContainSubstring("only options.loadAware may be set"),
+				ContainSubstring("can only be used with profile 'virt-higher-density'"),
+			), "Error should mention profile/options mismatch")
+		})
+
+		It("should reject virt-higher-density profile with load-aware options", func() {
+			By("attempting to create virt-higher-density profile with loadAware options")
+			invalidYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      deschedulingIntervalSeconds: 120
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err := cmd.CombinedOutput()
+
+			Expect(err).To(HaveOccurred(), "Should reject mismatched profile options")
+			Expect(string(output)).To(Or(
+				ContainSubstring("only options.virtHigherDensity may be set"),
+				ContainSubstring("can only be used with profile 'load-aware-rebalancing'"),
+			), "Error should mention profile/options mismatch")
+		})
+
+		It("should accept load-aware profile with matching loadAware options", func() {
+			By("creating load-aware profile with loadAware options")
+			validYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      deschedulingIntervalSeconds: 120
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(validYAML)
+			_, err := utils.Run(cmd)
+
+			Expect(err).NotTo(HaveOccurred(), "Should accept matching profile and options")
+		})
+
+		It("should accept virt-higher-density profile with matching virtHigherDensity options", func() {
+			By("creating virt-higher-density profile with virtHigherDensity options")
+			validYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(validYAML)
+			_, err := utils.Run(cmd)
+
+			Expect(err).NotTo(HaveOccurred(), "Should accept matching profile and options")
+		})
 	})
 
 	Context("Controller Stability", func() {
 		It("should handle rapid create/delete cycles", func() {
 			By("creating and deleting VirtPlatformConfigs rapidly")
+			// Use only example-profile since we're testing rapid create/delete
+			// and can reuse the same profile name
 			for i := 0; i < 5; i++ {
-				name := fmt.Sprintf("stress-test-%d", i)
-				sampleYAML := fmt.Sprintf(`
+				sampleYAML := `
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: %s
+  name: example-profile
 spec:
-  profile: %s
+  profile: example-profile
   action: DryRun
   failurePolicy: Abort
-`, name, name)
-
+`
 				cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
 				cmd.Stdin = strings.NewReader(sampleYAML)
 				_, err := utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred())
 
 				// Immediately delete
-				cmd = exec.Command("kubectl", "delete", "virtplatformconfig", name)
+				cmd = exec.Command("kubectl", "delete", "virtplatformconfig", "example-profile")
 				_, _ = utils.Run(cmd)
 			}
 
@@ -726,9 +875,9 @@ spec:
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: test-ignore-action
+  name: example-profile
 spec:
-  profile: test-ignore-action
+  profile: example-profile
   action: Ignore
   failurePolicy: Abort
 `
@@ -739,7 +888,7 @@ spec:
 
 			By("verifying it transitions to Ignored phase")
 			Eventually(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-ignore-action")
+				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Phase).To(Equal("Ignored"),
 					"Should transition to Ignored phase when action=Ignore")
 
@@ -753,7 +902,7 @@ spec:
 
 			By("verifying no plan items were generated")
 			Eventually(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-ignore-action")
+				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Items).To(BeEmpty(),
 					"Should not generate plan items when action=Ignore")
 			}).Should(Succeed())
@@ -765,9 +914,9 @@ spec:
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: test-exit-ignore
+  name: example-profile
 spec:
-  profile: test-exit-ignore
+  profile: example-profile
   action: Ignore
   failurePolicy: Abort
 `
@@ -778,19 +927,19 @@ spec:
 
 			By("waiting for Ignored phase")
 			Eventually(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-exit-ignore")
+				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Phase).To(Equal("Ignored"))
 			}).Should(Succeed())
 
 			By("changing action to DryRun")
-			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", "test-exit-ignore",
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", "example-profile",
 				"--type=merge", "-p", `{"spec":{"action":"DryRun"}}`)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("verifying it exits Ignored phase")
 			Eventually(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-exit-ignore")
+				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Phase).NotTo(Equal("Ignored"),
 					"Should exit Ignored phase when action changes")
 				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "ReviewRequired", "PrerequisiteFailed", "Failed"),
@@ -856,9 +1005,9 @@ spec:
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
 metadata:
-  name: test-stay-ignored
+  name: example-profile
 spec:
-  profile: test-stay-ignored
+  profile: example-profile
   action: Ignore
   failurePolicy: Abort
 `
@@ -869,13 +1018,13 @@ spec:
 
 			By("verifying it enters Ignored phase")
 			Eventually(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-stay-ignored")
+				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Phase).To(Equal("Ignored"))
 			}).Should(Succeed())
 
 			By("waiting to ensure it stays Ignored (simulating multiple reconciliations)")
 			Consistently(func(g Gomega) {
-				status := getVirtPlatformConfigStatus("test-stay-ignored")
+				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Phase).To(Equal("Ignored"),
 					"Should remain in Ignored phase across reconciliations")
 			}, 30*time.Second, 5*time.Second).Should(Succeed())

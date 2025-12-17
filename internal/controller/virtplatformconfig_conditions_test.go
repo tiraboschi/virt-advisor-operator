@@ -251,7 +251,7 @@ func TestUpdatePhaseConditions(t *testing.T) {
 					Generation: 1,
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "test-config",
+					Profile: "example-profile",
 				},
 				Status: advisorv1alpha1.VirtPlatformConfigStatus{
 					Conditions: []metav1.Condition{},

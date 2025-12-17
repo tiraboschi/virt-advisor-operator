@@ -38,7 +38,7 @@ export IMG=quay.io/your-username/virt-advisor-operator:v0.1.0
 make docker-build docker-push IMG=${IMG}
 ```
 
-**Using the OpenShift Internal Registry:**
+**Using the OpenShift Internal Registry (optional):**
 
 ```bash
 # Login to the OpenShift registry

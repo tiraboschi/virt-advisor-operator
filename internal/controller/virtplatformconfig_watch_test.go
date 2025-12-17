@@ -48,10 +48,10 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 			By("creating a VirtPlatformConfig that manages a ConfigMap")
 			config := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-managed-cm",
+					Name: "example-profile",
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "test-managed-cm",
+					Profile: "example-profile",
 				},
 			}
 			Expect(k8sClient.Create(testCtx, config)).To(Succeed())
@@ -110,10 +110,10 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 			By("creating a VirtPlatformConfig that manages a cluster-scoped resource")
 			config := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-managed-cluster",
+					Name: "load-aware-rebalancing",
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "test-managed-cluster",
+					Profile: "load-aware-rebalancing",
 				},
 			}
 			Expect(k8sClient.Create(testCtx, config)).To(Succeed())
@@ -156,10 +156,10 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 			By("creating a VirtPlatformConfig")
 			config := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-ns-mismatch",
+					Name: "virt-higher-density",
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "test-ns-mismatch",
+					Profile: "virt-higher-density",
 				},
 			}
 			Expect(k8sClient.Create(testCtx, config)).To(Succeed())
@@ -203,10 +203,10 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 			By("creating a VirtPlatformConfig")
 			config := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-kind-mismatch",
+					Name: "example-profile",
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "test-kind-mismatch",
+					Profile: "example-profile",
 				},
 			}
 			Expect(k8sClient.Create(testCtx, config)).To(Succeed())
@@ -277,10 +277,10 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 			By("creating a VirtPlatformConfig")
 			config := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-predicate",
+					Name: "load-aware-rebalancing",
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "test-predicate",
+					Profile: "load-aware-rebalancing",
 				},
 			}
 			Expect(k8sClient.Create(testCtx, config)).To(Succeed())

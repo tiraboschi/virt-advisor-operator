@@ -54,11 +54,17 @@ const (
 )
 
 // VirtPlatformConfigSpec defines the desired state of VirtPlatformConfig
-// +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'load-aware-rebalancing' ? has(self.options.loadAware) : true)",message="When profile is 'load-aware-rebalancing', only options.loadAware may be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'load-aware-rebalancing' ? has(self.options.loadAware) && !has(self.options.virtHigherDensity) : true)",message="When profile is 'load-aware-rebalancing', only options.loadAware may be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || (self.profile == 'virt-higher-density' ? has(self.options.virtHigherDensity) && !has(self.options.loadAware) : true)",message="When profile is 'virt-higher-density', only options.virtHigherDensity may be set"
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || (has(self.options.loadAware) ? self.profile == 'load-aware-rebalancing' : true)",message="options.loadAware can only be used with profile 'load-aware-rebalancing'"
+// +kubebuilder:validation:XValidation:rule="!has(self.options) || (has(self.options.virtHigherDensity) ? self.profile == 'virt-higher-density' : true)",message="options.virtHigherDensity can only be used with profile 'virt-higher-density'"
 type VirtPlatformConfigSpec struct {
 	// Profile is the named capability to activate.
 	// This field is immutable once set.
+	// Production profiles: load-aware-rebalancing, virt-higher-density
+	// Development/testing profile: example-profile
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=load-aware-rebalancing;virt-higher-density;example-profile
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Profile is immutable"
 	Profile string `json:"profile"`
 

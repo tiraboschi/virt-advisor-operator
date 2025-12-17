@@ -32,7 +32,7 @@ import (
 
 var _ = Describe("VirtPlatformConfig Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+		const resourceName = "example-profile" // Must be a valid profile name per enum validation
 
 		ctx := context.Background()
 
@@ -97,10 +97,10 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 			By("attempting to create a VirtPlatformConfig with mismatched name and profile")
 			resource := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "mismatched-name",
+					Name: "mismatched-name", // Name doesn't match profile
 				},
 				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
-					Profile: "different-profile",
+					Profile: "example-profile", // Valid profile but name doesn't match
 				},
 			}
 
@@ -111,7 +111,7 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 
 		It("should accept VirtPlatformConfig when name matches profile", func() {
 			By("creating a VirtPlatformConfig with matching name and profile")
-			const matchingName = "matching-profile"
+			const matchingName = "load-aware-rebalancing" // Must be a valid profile from enum
 			resource := &advisorv1alpha1.VirtPlatformConfig{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: matchingName,

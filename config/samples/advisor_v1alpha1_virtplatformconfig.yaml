@@ -8,7 +8,8 @@ metadata:
   name: example-profile
 spec:
   # Profile name determines which configuration template to apply
-  # Available profiles: example-profile
+  # Production profiles: load-aware-rebalancing, virt-higher-density
+  # Development/testing profile: example-profile
   profile: example-profile
 
   # Action controls the workflow:
