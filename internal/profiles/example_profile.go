@@ -70,9 +70,9 @@ func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client,
 		{
 			Name: "configure-example-component",
 			TargetRef: advisorv1alpha1.ObjectReference{
-				APIVersion: "apps/v1",
-				Kind:       "Deployment",
-				Name:       "example-component",
+				APIVersion: "v1",
+				Kind:       "ConfigMap",
+				Name:       "example-config",
 				Namespace:  "default",
 			},
 			ImpactSeverity: "Low",

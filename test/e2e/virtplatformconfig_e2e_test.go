@@ -266,19 +266,22 @@ spec:
 			Eventually(func(g Gomega) {
 				status := getVirtPlatformConfigStatus("example-profile")
 
-				phaseConditions := []string{"Drafting", "InProgress", "Completed", "Drifted", "Failed"}
+				// All phase-related conditions (conditions that represent the current phase state)
+				phaseConditions := []string{"Ignored", "Drafting", "ReviewRequired", "InProgress", "Completed", "Drifted", "Failed"}
 				trueCount := 0
+				var trueConditions []string
 
 				for _, condType := range phaseConditions {
 					cond := findCondition(status.Conditions, condType)
 					if cond != nil && cond.Status == "True" {
 						trueCount++
+						trueConditions = append(trueConditions, condType)
 					}
 				}
 
 				// Exactly one phase condition should be True
 				g.Expect(trueCount).To(Equal(1),
-					"Exactly one phase condition should be True")
+					"Exactly one phase condition should be True, but found %d: %v", trueCount, trueConditions)
 			}).Should(Succeed())
 		})
 	})
