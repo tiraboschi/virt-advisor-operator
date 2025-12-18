@@ -122,6 +122,7 @@ type VirtPlatformConfigReconciler struct {
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=kubedeschedulers,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=machineconfiguration.openshift.io,resources=machineconfigs,verbs=get;list;watch;create;delete;patch
 // +kubebuilder:rbac:groups=machineconfiguration.openshift.io,resources=machineconfigpools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hco.kubevirt.io,resources=hyperconvergeds,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -833,6 +834,13 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 			"Options changed - regenerating plan")
 	}
 
+	// Check if HCO-derived input dependencies have changed (for load-aware profile)
+	if changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan); changed {
+		logger.Info("HCO input dependencies changed, regenerating plan", "reason", reason)
+		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseDrafting,
+			fmt.Sprintf("HCO input dependency changed: %s", reason))
+	}
+
 	// Check health of MachineConfig items - the MCP might be updating due to other profiles
 	// This prevents marking as Completed when MCP is still converging
 	waitManager := plan.NewWaitStrategyManager()
@@ -1349,6 +1357,120 @@ func stringPtrEqual(a, b *string) bool {
 	return *a == *b
 }
 
+// hcoInputDependenciesChanged checks if HCO-derived eviction limits have changed.
+// Only applies to load-aware-rebalancing profile when user hasn't provided explicit limits.
+// Returns (changed bool, reason string).
+func (r *VirtPlatformConfigReconciler) hcoInputDependenciesChanged(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) (bool, string) {
+	logger := log.FromContext(ctx)
+
+	// Only applies to load-aware-rebalancing profile
+	if configPlan.Spec.Profile != "load-aware-rebalancing" {
+		return false, ""
+	}
+
+	// If user provided explicit eviction limits, HCO changes don't matter
+	hasExplicitLimits := false
+	if configPlan.Spec.Options != nil && configPlan.Spec.Options.LoadAware != nil {
+		if configPlan.Spec.Options.LoadAware.EvictionLimitTotal != nil ||
+			configPlan.Spec.Options.LoadAware.EvictionLimitNode != nil {
+			hasExplicitLimits = true
+		}
+	}
+
+	if hasExplicitLimits {
+		return false, ""
+	}
+
+	// User relies on HCO defaults - check if they changed
+	// Get the profile to access HCO limit computation
+	profile, err := profiles.DefaultRegistry.Get(configPlan.Spec.Profile)
+	if err != nil {
+		logger.Error(err, "Failed to get profile for HCO dependency check")
+		return false, ""
+	}
+
+	loadAwareProfile, ok := profile.(*profiles.LoadAwareRebalancingProfile)
+	if !ok {
+		return false, ""
+	}
+
+	// Read current HCO limits and compute scaled values
+	configOverrides := profiles.OptionsToMap(configPlan.Spec.Profile, configPlan.Spec.Options)
+	currentTotal, currentNode, err := loadAwareProfile.GetEvictionLimitsForTesting(ctx, r.Client, configOverrides)
+	if err != nil {
+		logger.V(1).Info("Could not read current HCO limits, skipping dependency check", "error", err)
+		return false, ""
+	}
+
+	// Read eviction limits from the applied descheduler configuration
+	deschedulerItem := r.findDeschedulerItem(configPlan)
+	if deschedulerItem == nil {
+		logger.V(1).Info("No KubeDescheduler item found, skipping HCO dependency check")
+		return false, ""
+	}
+
+	appliedTotal, appliedNode, err := r.extractAppliedEvictionLimits(ctx, deschedulerItem)
+	if err != nil {
+		logger.V(1).Info("Could not extract applied eviction limits", "error", err)
+		return false, ""
+	}
+
+	// Compare current HCO-derived limits with what's applied
+	if currentTotal != appliedTotal {
+		return true, fmt.Sprintf("HCO parallelMigrationsPerCluster changed (scaled %d -> %d)", appliedTotal, currentTotal)
+	}
+
+	if currentNode != appliedNode {
+		return true, fmt.Sprintf("HCO parallelOutboundMigrationsPerNode changed (scaled %d -> %d)", appliedNode, currentNode)
+	}
+
+	return false, ""
+}
+
+// findDeschedulerItem finds the KubeDescheduler item in the plan
+func (r *VirtPlatformConfigReconciler) findDeschedulerItem(configPlan *advisorv1alpha1.VirtPlatformConfig) *advisorv1alpha1.VirtPlatformConfigItem {
+	for i := range configPlan.Status.Items {
+		item := &configPlan.Status.Items[i]
+		if item.TargetRef.Kind == "KubeDescheduler" {
+			return item
+		}
+	}
+	return nil
+}
+
+// extractAppliedEvictionLimits extracts eviction limits from the applied descheduler configuration
+func (r *VirtPlatformConfigReconciler) extractAppliedEvictionLimits(ctx context.Context, item *advisorv1alpha1.VirtPlatformConfigItem) (int32, int32, error) {
+	// Read the current KubeDescheduler resource
+	descheduler := &unstructured.Unstructured{}
+	descheduler.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "operator.openshift.io",
+		Version: "v1",
+		Kind:    "KubeDescheduler",
+	})
+
+	key := types.NamespacedName{
+		Name:      item.TargetRef.Name,
+		Namespace: item.TargetRef.Namespace,
+	}
+
+	if err := r.Get(ctx, key, descheduler); err != nil {
+		return 0, 0, fmt.Errorf("failed to get descheduler: %w", err)
+	}
+
+	// Extract evictionLimits from spec.profileCustomizations
+	total, _, err := unstructured.NestedInt64(descheduler.Object, "spec", "profileCustomizations", "evictionLimits", "total")
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to extract evictionLimits.total: %w", err)
+	}
+
+	node, _, err := unstructured.NestedInt64(descheduler.Object, "spec", "profileCustomizations", "evictionLimits", "node")
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to extract evictionLimits.node: %w", err)
+	}
+
+	return int32(total), int32(node), nil
+}
+
 // managedResourcePredicate returns a predicate that filters events to only managed resources.
 // This optimizes memory by only caching resources that are referenced in VirtPlatformConfig items.
 func (r *VirtPlatformConfigReconciler) managedResourcePredicate() predicate.Predicate {
@@ -1638,6 +1760,106 @@ func (r *VirtPlatformConfigReconciler) enqueueMachineConfigPoolOwners() handler.
 	})
 }
 
+// hcoMigrationConfigPredicate returns a predicate that only triggers on HCO spec.liveMigrationConfig changes.
+// This filters out status updates and other spec changes to minimize reconciliation noise.
+func (r *VirtPlatformConfigReconciler) hcoMigrationConfigPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			// New HCO CR - always trigger to pick up initial limits
+			return true
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldObj, ok := e.ObjectOld.(*unstructured.Unstructured)
+			if !ok {
+				return false
+			}
+			newObj, ok := e.ObjectNew.(*unstructured.Unstructured)
+			if !ok {
+				return false
+			}
+
+			// Only trigger if spec.liveMigrationConfig changed
+			oldConfig, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "liveMigrationConfig")
+			newConfig, _, _ := unstructured.NestedMap(newObj.Object, "spec", "liveMigrationConfig")
+
+			// Use JSON comparison for deep equality
+			oldJSON, _ := json.Marshal(oldConfig)
+			newJSON, _ := json.Marshal(newConfig)
+
+			return string(oldJSON) != string(newJSON)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			// HCO deleted - don't trigger (profiles will fail prerequisite checks anyway)
+			return false
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return false
+		},
+	}
+}
+
+// enqueueHCODependentConfigs returns an event handler that enqueues VirtPlatformConfigs
+// that depend on HCO migration limits for eviction tuning.
+func (r *VirtPlatformConfigReconciler) enqueueHCODependentConfigs() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		logger := log.FromContext(ctx)
+
+		logger.V(1).Info("HyperConverged migration config changed, finding dependent VirtPlatformConfigs")
+
+		// List all VirtPlatformConfigs
+		configList := &advisorv1alpha1.VirtPlatformConfigList{}
+		if err := r.List(ctx, configList); err != nil {
+			logger.Error(err, "Failed to list VirtPlatformConfigs for HyperConverged event")
+			return nil
+		}
+
+		var requests []reconcile.Request
+		for _, config := range configList.Items {
+			// Only care about load-aware-rebalancing profile
+			if config.Spec.Profile != "load-aware-rebalancing" {
+				continue
+			}
+
+			// Only care about completed configs (active management)
+			// Skip Pending, Drafting, Failed, etc. - they'll pick up new limits on next plan generation
+			if config.Status.Phase != advisorv1alpha1.PlanPhaseCompleted &&
+				config.Status.Phase != advisorv1alpha1.PlanPhaseCompletedWithErrors {
+				continue
+			}
+
+			// Check if user provided explicit eviction limits
+			// If they did, they don't rely on HCO defaults, so HCO changes don't matter
+			hasExplicitLimits := false
+			if config.Spec.Options != nil && config.Spec.Options.LoadAware != nil {
+				if config.Spec.Options.LoadAware.EvictionLimitTotal != nil ||
+					config.Spec.Options.LoadAware.EvictionLimitNode != nil {
+					hasExplicitLimits = true
+				}
+			}
+
+			if hasExplicitLimits {
+				logger.V(1).Info("Skipping VirtPlatformConfig with explicit eviction limits",
+					"virtplatformconfig", config.Name,
+					"reason", "User-provided limits override HCO defaults")
+				continue
+			}
+
+			// This config relies on HCO defaults - enqueue for regeneration
+			logger.Info("Enqueuing VirtPlatformConfig due to HyperConverged migration config change",
+				"virtplatformconfig", config.Name,
+				"reason", "Config relies on HCO default eviction limits")
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name: config.Name,
+					// VirtPlatformConfig is cluster-scoped
+				},
+			})
+		}
+
+		return requests
+	})
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	logger := mgr.GetLogger().WithName("setup")
@@ -1742,6 +1964,34 @@ func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	} else {
 		logger.Info("MachineConfigPool CRD not available, skipping health monitoring watch",
 			"note", "MachineConfig health checks will not auto-update")
+	}
+
+	// Register watch for HyperConverged (input dependency for load-aware profile)
+	// When HCO migration limits change, we need to regenerate plans that rely on them
+	hcoGVK := schema.GroupVersionKind{
+		Group:   "hco.kubevirt.io",
+		Version: "v1beta1",
+		Kind:    "HyperConverged",
+	}
+	hcoCRDName := discovery.GVKToCRDName(hcoGVK)
+	hcoExists, err := crdChecker.CRDExists(ctx, hcoCRDName)
+	if err == nil && hcoExists {
+		logger.Info("Registering watch for HyperConverged (input dependency)",
+			"group", hcoGVK.Group,
+			"version", hcoGVK.Version,
+			"kind", hcoGVK.Kind)
+
+		hcoResource := &unstructured.Unstructured{}
+		hcoResource.SetGroupVersionKind(hcoGVK)
+
+		controllerBuilder = controllerBuilder.Watches(
+			hcoResource,
+			r.enqueueHCODependentConfigs(),
+			builder.WithPredicates(r.hcoMigrationConfigPredicate()),
+		)
+	} else {
+		logger.Info("HyperConverged CRD not available, skipping input dependency watch",
+			"note", "Changes to HCO migration limits will not trigger plan regeneration")
 	}
 
 	// Initialize advertised profiles using direct client (no cache dependency)

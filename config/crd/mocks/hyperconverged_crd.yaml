@@ -1,0 +1,42 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hyperconvergeds.hco.kubevirt.io
+spec:
+  group: hco.kubevirt.io
+  names:
+    kind: HyperConverged
+    listKind: HyperConvergedList
+    plural: hyperconvergeds
+    singular: hyperconverged
+  scope: Namespaced
+  versions:
+  - name: v1beta1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            properties:
+              liveMigrationConfig:
+                type: object
+                properties:
+                  parallelMigrationsPerCluster:
+                    type: integer
+                    format: int64
+                  parallelOutboundMigrationsPerNode:
+                    type: integer
+                    format: int64
+          status:
+            type: object
+    subresources:
+      status: {}

@@ -46,6 +46,14 @@ func loadAwareToMap(config *advisorv1alpha1.LoadAwareConfig) map[string]string {
 		m["devDeviationThresholds"] = *config.DevDeviationThresholds
 	}
 
+	if config.EvictionLimitTotal != nil {
+		m["evictionLimitTotal"] = strconv.FormatInt(int64(*config.EvictionLimitTotal), 10)
+	}
+
+	if config.EvictionLimitNode != nil {
+		m["evictionLimitNode"] = strconv.FormatInt(int64(*config.EvictionLimitNode), 10)
+	}
+
 	return m
 }
 

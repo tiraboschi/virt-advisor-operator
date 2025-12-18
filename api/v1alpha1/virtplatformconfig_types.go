@@ -156,6 +156,22 @@ type LoadAwareConfig struct {
 	// +kubebuilder:validation:Enum=Low;Medium;High;AsymmetricLow;AsymmetricMedium;AsymmetricHigh
 	// +optional
 	DevDeviationThresholds *string `json:"devDeviationThresholds,omitempty"`
+
+	// EvictionLimitTotal limits the total number of pod evictions across the entire cluster.
+	// If not set, defaults to scaled value from HyperConverged.spec.liveMigrationConfig.parallelMigrationsPerCluster.
+	// When HCO value is <10, uses it directly. When >=10, scales using monotonic function: 10 + (value-10)*0.8.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000
+	// +optional
+	EvictionLimitTotal *int32 `json:"evictionLimitTotal,omitempty"`
+
+	// EvictionLimitNode limits parallel pod evictions per node.
+	// If not set, defaults to scaled value from HyperConverged.spec.liveMigrationConfig.parallelOutboundMigrationsPerNode.
+	// When HCO value is <10, uses it directly. When >=10, scales using monotonic function: 10 + (value-10)*0.8.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	EvictionLimitNode *int32 `json:"evictionLimitNode,omitempty"`
 }
 
 // VirtHigherDensityConfig contains typed configuration for the virt-higher-density profile.

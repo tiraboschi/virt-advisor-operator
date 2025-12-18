@@ -93,6 +93,11 @@ var _ = BeforeSuite(func() {
 	err = integrationK8sClient.Create(integrationCtx, machineconfigpoolCRD)
 	Expect(err).NotTo(HaveOccurred())
 
+	By("loading HyperConverged CRD from file")
+	hyperconvergedCRD := loadHyperConvergedCRDFromFile()
+	err = integrationK8sClient.Create(integrationCtx, hyperconvergedCRD)
+	Expect(err).NotTo(HaveOccurred())
+
 	// Wait for CRDs to be established
 	time.Sleep(2 * time.Second)
 })
@@ -142,6 +147,20 @@ func loadMachineConfigPoolCRDFromFile() *apiextensionsv1.CustomResourceDefinitio
 	var crd apiextensionsv1.CustomResourceDefinition
 	err = yaml.Unmarshal(crdBytes, &crd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfigPool CRD")
+
+	return &crd
+}
+
+// Helper function to load HyperConverged CRD from file
+func loadHyperConvergedCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	// Load the actual HyperConverged CRD from the mocks directory
+	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "hyperconverged_crd.yaml")
+	crdBytes, err := os.ReadFile(crdPath)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read HyperConverged CRD file")
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	err = yaml.Unmarshal(crdBytes, &crd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal HyperConverged CRD")
 
 	return &crd
 }
@@ -977,4 +996,186 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh))
 		})
 	})
+
+	Describe("HCO Eviction Limits Integration", func() {
+		const (
+			hcoNamespace = "openshift-cnv"
+			hcoName      = "kubevirt-hyperconverged"
+		)
+
+		BeforeEach(func() {
+			// Create HCO namespace if it doesn't exist
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: hcoNamespace,
+				},
+			}
+			_ = integrationK8sClient.Create(integrationCtx, ns)
+		})
+
+		AfterEach(func() {
+			// Clean up HCO CR if it exists
+			hco := &unstructured.Unstructured{}
+			hco.SetGroupVersionKind(HyperConvergedGVK)
+			hco.SetName(hcoName)
+			hco.SetNamespace(hcoNamespace)
+			_ = integrationK8sClient.Delete(integrationCtx, hco)
+		})
+
+		It("should use HCO values when less than 10 (no scaling)", func() {
+			// Create HCO CR with small values (<10)
+			hco := createHCOWithLimits(5, 2)
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			// Get eviction limits - should use HCO values directly
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(5)), "should use HCO parallelMigrationsPerCluster as-is")
+			Expect(node).To(Equal(int32(2)), "should use HCO parallelOutboundMigrationsPerNode as-is")
+		})
+
+		It("should scale HCO values to 80% when >= 10", func() {
+			// Create HCO CR with large values (>=10)
+			hco := createHCOWithLimits(20, 15)
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			// Get eviction limits - should scale to 80%
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(18)), "10 + (20-10)*0.8 = 10 + 8 = 18")
+			Expect(node).To(Equal(int32(14)), "10 + (15-10)*0.8 = 10 + 4 = 14")
+		})
+
+		It("should use defaults when HCO CR doesn't exist", func() {
+			// Don't create HCO CR
+
+			// Get eviction limits - should use fallback defaults
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(defaultEvictionLimitsTotal)), "should use default")
+			Expect(node).To(Equal(int32(defaultEvictionLimitsNode)), "should use default")
+		})
+
+		It("should respect user-provided overrides", func() {
+			// Create HCO CR with some values
+			hco := createHCOWithLimits(20, 15)
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			// Provide user overrides
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{
+				"evictionLimitTotal": "10",
+				"evictionLimitNode":  "7",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(10)), "should use user-provided value")
+			Expect(node).To(Equal(int32(7)), "should use user-provided value")
+		})
+
+		It("should mix user overrides with HCO values", func() {
+			// Create HCO CR
+			hco := createHCOWithLimits(25, 12)
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			// Override only one value
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{
+				"evictionLimitTotal": "8", // User override
+				// evictionLimitNode not set - should come from HCO
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(8)), "should use user override")
+			Expect(node).To(Equal(int32(11)), "10 + (12-10)*0.8 = 10 + 1 = 11 (scaled HCO value)")
+		})
+
+		It("should include eviction limits in generated KubeDescheduler plan", func() {
+			// Create HCO CR
+			hco := createHCOWithLimits(25, 15)
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			// Generate plan items
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(items).To(HaveLen(2))
+
+			// Check KubeDescheduler item
+			deschedulerItem := items[0]
+			Expect(deschedulerItem.Name).To(Equal("enable-load-aware-descheduling"))
+
+			// Verify eviction limits are in the diff as nested structure
+			Expect(deschedulerItem.Diff).To(ContainSubstring("evictionLimits"))
+			Expect(deschedulerItem.Diff).To(ContainSubstring("total"))
+			Expect(deschedulerItem.Diff).To(ContainSubstring("node"))
+
+			// Verify scaled values (25 -> 22, 15 -> 14)
+			Expect(deschedulerItem.Diff).To(ContainSubstring("22"), "should show scaled total limit")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("14"), "should show scaled node limit")
+		})
+
+		It("should use user-provided eviction limits in generated plan", func() {
+			// Generate plan with user overrides
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"evictionLimitTotal": "15",
+				"evictionLimitNode":  "8",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			deschedulerItem := items[0]
+			Expect(deschedulerItem.Diff).To(ContainSubstring("15"), "should show user total value")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("8"), "should show user node value")
+		})
+
+		It("should handle HCO CR with missing liveMigrationConfig gracefully", func() {
+			// Create HCO CR without liveMigrationConfig section
+			hco := &unstructured.Unstructured{}
+			hco.SetGroupVersionKind(HyperConvergedGVK)
+			hco.SetName(hcoName)
+			hco.SetNamespace(hcoNamespace)
+			hco.Object["spec"] = map[string]interface{}{
+				// No liveMigrationConfig
+			}
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			// Should fall back to defaults
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(defaultEvictionLimitsTotal)))
+			Expect(node).To(Equal(int32(defaultEvictionLimitsNode)))
+		})
+
+		It("should handle HCO CR with partial liveMigrationConfig", func() {
+			// Create HCO CR with only one limit set
+			hco := &unstructured.Unstructured{}
+			hco.SetGroupVersionKind(HyperConvergedGVK)
+			hco.SetName(hcoName)
+			hco.SetNamespace(hcoNamespace)
+			hco.Object["spec"] = map[string]interface{}{
+				"liveMigrationConfig": map[string]interface{}{
+					"parallelMigrationsPerCluster": int64(10),
+					// parallelOutboundMigrationsPerNode not set
+				},
+			}
+			Expect(integrationK8sClient.Create(integrationCtx, hco)).To(Succeed())
+
+			total, node, err := profile.getEvictionLimits(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(int32(10)), "10 + (10-10)*0.8 = 10 (continuous at boundary)")
+			Expect(node).To(Equal(int32(defaultEvictionLimitsNode)), "should use default")
+		})
+	})
 })
+
+// Helper function to create HCO CR with specific migration limits
+func createHCOWithLimits(perCluster, perNode int64) *unstructured.Unstructured {
+	hco := &unstructured.Unstructured{}
+	hco.SetGroupVersionKind(HyperConvergedGVK)
+	hco.SetName("kubevirt-hyperconverged")
+	hco.SetNamespace("openshift-cnv")
+
+	hco.Object["spec"] = map[string]interface{}{
+		"liveMigrationConfig": map[string]interface{}{
+			"parallelMigrationsPerCluster":      perCluster,
+			"parallelOutboundMigrationsPerNode": perNode,
+		},
+	}
+
+	return hco
+}

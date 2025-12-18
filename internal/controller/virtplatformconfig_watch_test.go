@@ -357,4 +357,165 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 			Expect(handler).ToNot(BeNil())
 		})
 	})
+
+	Context("hcoMigrationConfigPredicate", func() {
+		var (
+			reconciler *VirtPlatformConfigReconciler
+		)
+
+		BeforeEach(func() {
+			reconciler = &VirtPlatformConfigReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+		})
+
+		It("should trigger on HCO creation", func() {
+			predicate := reconciler.hcoMigrationConfigPredicate()
+
+			hco := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+					"spec": map[string]interface{}{
+						"liveMigrationConfig": map[string]interface{}{
+							"parallelMigrationsPerCluster":      int64(20),
+							"parallelOutboundMigrationsPerNode": int64(10),
+						},
+					},
+				},
+			}
+
+			result := predicate.Create(event.CreateEvent{Object: hco})
+			Expect(result).To(BeTrue(), "should trigger on HCO creation")
+		})
+
+		It("should trigger when spec.liveMigrationConfig changes", func() {
+			predicate := reconciler.hcoMigrationConfigPredicate()
+
+			oldHCO := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+					"spec": map[string]interface{}{
+						"liveMigrationConfig": map[string]interface{}{
+							"parallelMigrationsPerCluster":      int64(20),
+							"parallelOutboundMigrationsPerNode": int64(10),
+						},
+					},
+				},
+			}
+
+			newHCO := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+					"spec": map[string]interface{}{
+						"liveMigrationConfig": map[string]interface{}{
+							"parallelMigrationsPerCluster":      int64(30), // Changed!
+							"parallelOutboundMigrationsPerNode": int64(10),
+						},
+					},
+				},
+			}
+
+			result := predicate.Update(event.UpdateEvent{
+				ObjectOld: oldHCO,
+				ObjectNew: newHCO,
+			})
+			Expect(result).To(BeTrue(), "should trigger when liveMigrationConfig changes")
+		})
+
+		It("should not trigger when spec.liveMigrationConfig unchanged", func() {
+			predicate := reconciler.hcoMigrationConfigPredicate()
+
+			oldHCO := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":            "kubevirt-hyperconverged",
+						"namespace":       "openshift-cnv",
+						"resourceVersion": "1",
+					},
+					"spec": map[string]interface{}{
+						"liveMigrationConfig": map[string]interface{}{
+							"parallelMigrationsPerCluster":      int64(20),
+							"parallelOutboundMigrationsPerNode": int64(10),
+						},
+					},
+					"status": map[string]interface{}{
+						"conditions": []interface{}{
+							map[string]interface{}{
+								"type":   "Available",
+								"status": "True",
+							},
+						},
+					},
+				},
+			}
+
+			newHCO := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":            "kubevirt-hyperconverged",
+						"namespace":       "openshift-cnv",
+						"resourceVersion": "2", // Only metadata/status changed
+					},
+					"spec": map[string]interface{}{
+						"liveMigrationConfig": map[string]interface{}{
+							"parallelMigrationsPerCluster":      int64(20), // Same
+							"parallelOutboundMigrationsPerNode": int64(10), // Same
+						},
+					},
+					"status": map[string]interface{}{
+						"conditions": []interface{}{
+							map[string]interface{}{
+								"type":   "Available",
+								"status": "False", // Status changed
+							},
+						},
+					},
+				},
+			}
+
+			result := predicate.Update(event.UpdateEvent{
+				ObjectOld: oldHCO,
+				ObjectNew: newHCO,
+			})
+			Expect(result).To(BeFalse(), "should not trigger when only status changes")
+		})
+
+		It("should not trigger on HCO deletion", func() {
+			predicate := reconciler.hcoMigrationConfigPredicate()
+
+			hco := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+				},
+			}
+
+			result := predicate.Delete(event.DeleteEvent{Object: hco})
+			Expect(result).To(BeFalse(), "should not trigger on HCO deletion")
+		})
+	})
 })

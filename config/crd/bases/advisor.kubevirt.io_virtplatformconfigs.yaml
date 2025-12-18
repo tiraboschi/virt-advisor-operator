@@ -121,6 +121,24 @@ spec:
                           When enabled, creates a MachineConfig with psi=1 kernel argument.
                           When disabled, the MachineConfig item is not included in the plan.
                         type: boolean
+                      evictionLimitNode:
+                        description: |-
+                          EvictionLimitNode limits parallel pod evictions per node.
+                          If not set, defaults to scaled value from HyperConverged.spec.liveMigrationConfig.parallelOutboundMigrationsPerNode.
+                          When HCO value is <10, uses it directly. When >=10, scales using monotonic function: 10 + (value-10)*0.8.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      evictionLimitTotal:
+                        description: |-
+                          EvictionLimitTotal limits the total number of pod evictions across the entire cluster.
+                          If not set, defaults to scaled value from HyperConverged.spec.liveMigrationConfig.parallelMigrationsPerCluster.
+                          When HCO value is <10, uses it directly. When >=10, scales using monotonic function: 10 + (value-10)*0.8.
+                        format: int32
+                        maximum: 1000
+                        minimum: 1
+                        type: integer
                       mode:
                         default: Automatic
                         description: |-
@@ -235,6 +253,24 @@ spec:
                           When enabled, creates a MachineConfig with psi=1 kernel argument.
                           When disabled, the MachineConfig item is not included in the plan.
                         type: boolean
+                      evictionLimitNode:
+                        description: |-
+                          EvictionLimitNode limits parallel pod evictions per node.
+                          If not set, defaults to scaled value from HyperConverged.spec.liveMigrationConfig.parallelOutboundMigrationsPerNode.
+                          When HCO value is <10, uses it directly. When >=10, scales using monotonic function: 10 + (value-10)*0.8.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      evictionLimitTotal:
+                        description: |-
+                          EvictionLimitTotal limits the total number of pod evictions across the entire cluster.
+                          If not set, defaults to scaled value from HyperConverged.spec.liveMigrationConfig.parallelMigrationsPerCluster.
+                          When HCO value is <10, uses it directly. When >=10, scales using monotonic function: 10 + (value-10)*0.8.
+                        format: int32
+                        maximum: 1000
+                        minimum: 1
+                        type: integer
                       mode:
                         default: Automatic
                         description: |-
