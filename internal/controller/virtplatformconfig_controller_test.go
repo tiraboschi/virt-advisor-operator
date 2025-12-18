@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -32,6 +33,55 @@ import (
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
+
+// TestIsNoChangeDiff tests the diff detection helper
+func TestIsNoChangeDiff(t *testing.T) {
+	tests := []struct {
+		name     string
+		diff     string
+		expected bool
+	}{
+		{
+			name:     "Empty diff",
+			diff:     "",
+			expected: true,
+		},
+		{
+			name:     "Explicit no changes marker",
+			diff:     "--- resource (Kind)\n+++ resource (Kind)\n(no changes)\n",
+			expected: true,
+		},
+		{
+			name:     "Only header lines",
+			diff:     "--- resource (Kind)\n+++ resource (Kind)\n",
+			expected: true,
+		},
+		{
+			name:     "Actual changes with additions",
+			diff:     "--- resource (Kind)\n+++ resource (Kind)\n+  newField: value\n",
+			expected: false,
+		},
+		{
+			name:     "Actual changes with deletions",
+			diff:     "--- resource (Kind)\n+++ resource (Kind)\n-  oldField: value\n",
+			expected: false,
+		},
+		{
+			name:     "Actual changes with modifications",
+			diff:     "--- resource (Kind)\n+++ resource (Kind)\n-  field: oldValue\n+  field: newValue\n",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isNoChangeDiff(tt.diff)
+			if result != tt.expected {
+				t.Errorf("Expected %v for diff:\n%s\nGot %v", tt.expected, tt.diff, result)
+			}
+		})
+	}
+}
 
 var _ = Describe("VirtPlatformConfig Controller", func() {
 	Context("When reconciling a resource", func() {
@@ -284,6 +334,31 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 				return resource.Status.Phase
 			}).Should(Equal(advisorv1alpha1.PlanPhasePending))
 		})
+	})
+
+	Context("When detecting no-change plans", func() {
+		// These tests verify the logic in handleDraftingPhase that detects
+		// when all diffs show "(no changes)" and smartly transitions to Completed or InProgress
+
+		It("should detect when a diff has no changes", func() {
+			// This verifies the isNoChangeDiff helper function
+			By("checking diffs with no changes")
+			Expect(isNoChangeDiff("")).To(BeTrue())
+			Expect(isNoChangeDiff("--- resource (Kind)\n+++ resource (Kind)\n(no changes)\n")).To(BeTrue())
+			Expect(isNoChangeDiff("--- resource (Kind)\n+++ resource (Kind)\n")).To(BeTrue())
+
+			By("checking diffs with actual changes")
+			Expect(isNoChangeDiff("--- resource (Kind)\n+++ resource (Kind)\n+  newField: value\n")).To(BeFalse())
+			Expect(isNoChangeDiff("--- resource (Kind)\n+++ resource (Kind)\n-  oldField: value\n")).To(BeFalse())
+		})
+
+		// Note: Full integration tests for the no-change path would require:
+		// 1. A running cluster with the actual CRDs (KubeDescheduler, MachineConfig)
+		// 2. Resources that already exist with the desired state
+		// These scenarios are better tested in e2e tests or manually on a real cluster.
+		//
+		// The unit tests above verify the diff detection logic.
+		// The integration behavior is tested implicitly by other existing tests.
 	})
 
 	Context("When optimistic locking detects stale plans", func() {

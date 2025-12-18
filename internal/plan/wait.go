@@ -135,12 +135,49 @@ func (s *MachineConfigWaitStrategy) Wait(ctx context.Context, c client.Client, i
 		return fmt.Sprintf("MachineConfigPool '%s' is degraded (%d degraded machines)", poolName, degradedMachineCount), false, nil
 	}
 
+	// CRITICAL: Check MCP conditions to detect if it's still processing the MachineConfig
+	// This prevents a race condition where we check before the MCP has started updating
+	conditions, found, err := unstructured.NestedSlice(status, "conditions")
+	if err != nil || !found {
+		return "MachineConfigPool conditions not available", false, nil
+	}
+
+	isUpdated := false
+	isUpdating := false
+	for _, cond := range conditions {
+		condMap, ok := cond.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, _, _ := unstructured.NestedString(condMap, "type")
+		condStatus, _, _ := unstructured.NestedString(condMap, "status")
+
+		if condType == "Updated" && condStatus == "True" {
+			isUpdated = true
+		}
+		if condType == "Updating" && condStatus == "True" {
+			isUpdating = true
+		}
+	}
+
+	// If MCP is currently updating, it's not ready yet
+	if isUpdating {
+		return fmt.Sprintf("MachineConfigPool '%s' is updating (Updated: %d/%d, Ready: %d/%d)",
+			poolName, updatedMachineCount, machineCount, readyMachineCount, machineCount), false, nil
+	}
+
+	// If MCP is not marked as Updated, it hasn't finished processing
+	if !isUpdated {
+		return fmt.Sprintf("MachineConfigPool '%s' is processing changes (Updated: %d/%d, Ready: %d/%d)",
+			poolName, updatedMachineCount, machineCount, readyMachineCount, machineCount), false, nil
+	}
+
 	// Check if all machines are updated and ready
 	if updatedMachineCount == machineCount && readyMachineCount == machineCount && machineCount > 0 {
 		return fmt.Sprintf("MachineConfigPool '%s' is ready (all %d nodes updated)", poolName, machineCount), true, nil
 	}
 
-	// Still updating
+	// Still waiting for machines to converge
 	return fmt.Sprintf("Waiting for MachineConfigPool '%s' to stabilize (Updated: %d/%d, Ready: %d/%d)",
 		poolName, updatedMachineCount, machineCount, readyMachineCount, machineCount), false, nil
 }

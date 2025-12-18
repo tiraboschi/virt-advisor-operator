@@ -119,19 +119,54 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 	tests := []struct {
 		name            string
 		poolStatus      map[string]interface{}
+		conditions      []map[string]interface{}
 		expectedHealthy bool
 		expectedMsgPart string
 	}{
 		{
-			name: "All machines ready",
+			name: "All machines ready and MCP Updated",
 			poolStatus: map[string]interface{}{
 				"machineCount":         int64(3),
 				"updatedMachineCount":  int64(3),
 				"readyMachineCount":    int64(3),
 				"degradedMachineCount": int64(0),
 			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "True"},
+				{"type": "Updating", "status": "False"},
+			},
 			expectedHealthy: true,
 			expectedMsgPart: "ready",
+		},
+		{
+			name: "MCP is currently Updating (race condition)",
+			poolStatus: map[string]interface{}{
+				"machineCount":         int64(3),
+				"updatedMachineCount":  int64(3),
+				"readyMachineCount":    int64(3),
+				"degradedMachineCount": int64(0),
+			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "False"},
+				{"type": "Updating", "status": "True"},
+			},
+			expectedHealthy: false,
+			expectedMsgPart: "is updating",
+		},
+		{
+			name: "MCP not yet Updated (processing changes)",
+			poolStatus: map[string]interface{}{
+				"machineCount":         int64(3),
+				"updatedMachineCount":  int64(3),
+				"readyMachineCount":    int64(3),
+				"degradedMachineCount": int64(0),
+			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "False"},
+				{"type": "Updating", "status": "False"},
+			},
+			expectedHealthy: false,
+			expectedMsgPart: "processing changes",
 		},
 		{
 			name: "Some machines still updating",
@@ -141,8 +176,12 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 				"readyMachineCount":    int64(2),
 				"degradedMachineCount": int64(0),
 			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "False"},
+				{"type": "Updating", "status": "True"},
+			},
 			expectedHealthy: false,
-			expectedMsgPart: "Waiting for MachineConfigPool",
+			expectedMsgPart: "is updating",
 		},
 		{
 			name: "Degraded machines present",
@@ -151,6 +190,10 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 				"updatedMachineCount":  int64(3),
 				"readyMachineCount":    int64(2),
 				"degradedMachineCount": int64(1),
+			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "True"},
+				{"type": "Updating", "status": "False"},
 			},
 			expectedHealthy: false,
 			expectedMsgPart: "degraded",
@@ -163,6 +206,10 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 				"readyMachineCount":    int64(2),
 				"degradedMachineCount": int64(0),
 			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "True"},
+				{"type": "Updating", "status": "False"},
+			},
 			expectedHealthy: false,
 			expectedMsgPart: "Waiting",
 		},
@@ -173,6 +220,10 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 				"updatedMachineCount":  int64(0),
 				"readyMachineCount":    int64(0),
 				"degradedMachineCount": int64(0),
+			},
+			conditions: []map[string]interface{}{
+				{"type": "Updated", "status": "True"},
+				{"type": "Updating", "status": "False"},
 			},
 			expectedHealthy: false,
 			expectedMsgPart: "Waiting",
@@ -187,12 +238,32 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 			readyMachineCount, _ := tt.poolStatus["readyMachineCount"].(int64)
 			degradedMachineCount, _ := tt.poolStatus["degradedMachineCount"].(int64)
 
-			// Simulate the health check logic
+			// Parse conditions
+			isUpdated := false
+			isUpdating := false
+			for _, cond := range tt.conditions {
+				condType, _ := cond["type"].(string)
+				condStatus, _ := cond["status"].(string)
+				if condType == "Updated" && condStatus == "True" {
+					isUpdated = true
+				}
+				if condType == "Updating" && condStatus == "True" {
+					isUpdating = true
+				}
+			}
+
+			// Simulate the health check logic (matching wait.go implementation)
 			var msg string
 			var healthy bool
 
 			if degradedMachineCount > 0 {
 				msg = "degraded"
+				healthy = false
+			} else if isUpdating {
+				msg = "is updating"
+				healthy = false
+			} else if !isUpdated {
+				msg = "processing changes"
 				healthy = false
 			} else if updatedMachineCount == machineCount && readyMachineCount == machineCount && machineCount > 0 {
 				msg = "ready"
@@ -203,8 +274,8 @@ func TestMachineConfigWaitStrategy_ParsePoolStatus(t *testing.T) {
 			}
 
 			if healthy != tt.expectedHealthy {
-				t.Errorf("Expected healthy=%v, got %v (machineCount=%d, updated=%d, ready=%d, degraded=%d)",
-					tt.expectedHealthy, healthy, machineCount, updatedMachineCount, readyMachineCount, degradedMachineCount)
+				t.Errorf("Expected healthy=%v, got %v (machineCount=%d, updated=%d, ready=%d, degraded=%d, isUpdated=%v, isUpdating=%v)",
+					tt.expectedHealthy, healthy, machineCount, updatedMachineCount, readyMachineCount, degradedMachineCount, isUpdated, isUpdating)
 			}
 
 			if !strings.Contains(msg, tt.expectedMsgPart) {

@@ -49,6 +49,7 @@ type Condition struct {
 
 type VirtPlatformConfigItemStatus struct {
 	Name      string `json:"name"`
+	State     string `json:"state,omitempty"`
 	Phase     string `json:"phase"`
 	Message   string `json:"message,omitempty"`
 	Diff      string `json:"diff,omitempty"`
@@ -150,7 +151,7 @@ spec:
 	})
 
 	Context("Status Transitions", func() {
-		It("should transition through phases: Drafting → ReviewRequired", func() {
+		It("should transition through phases: Drafting → ReviewRequired or Completed", func() {
 			By("applying a VirtPlatformConfig with example-profile")
 			sampleYAML := `
 apiVersion: advisor.kubevirt.io/v1alpha1
@@ -169,6 +170,7 @@ spec:
 
 			By("observing phase transitions")
 			var seenReviewRequired bool
+			var seenCompleted bool
 			Eventually(func(g Gomega) {
 				status := getVirtPlatformConfigStatus("example-profile")
 
@@ -193,16 +195,23 @@ spec:
 						"Completed condition should be False in ReviewRequired phase")
 				}
 
-				// Eventually should reach a terminal state (ReviewRequired for DryRun, or a failure state)
-				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "ReviewRequired", "PrerequisiteFailed", "Failed"))
+				if status.Phase == "Completed" {
+					seenCompleted = true
+					// Verify Completed condition
+					completedCond := findCondition(status.Conditions, "Completed")
+					g.Expect(completedCond).NotTo(BeNil())
+					g.Expect(completedCond.Status).To(Equal("True"))
+				}
+
+				// Eventually should reach a terminal state
+				// Note: Completed is valid if cluster is already in desired state (no changes needed)
+				// ReviewRequired is valid if there are changes to review
+				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "ReviewRequired", "Completed", "PrerequisiteFailed", "Failed"))
 			}, 2*time.Minute).Should(Succeed())
 
 			By("verifying a terminal phase was reached")
-			// Note: We expect ReviewRequired for DryRun, but the example profile may fail
-			// The important validation is that Completed=False when in ReviewRequired phase
-			if seenReviewRequired {
-				Expect(seenReviewRequired).To(BeTrue(), "ReviewRequired phase validation passed")
-			}
+			Expect(seenReviewRequired || seenCompleted).To(BeTrue(),
+				"Should reach either ReviewRequired (changes needed) or Completed (no changes)")
 		})
 	})
 
@@ -800,8 +809,8 @@ spec:
 					"Should exit Ignored phase after activation")
 
 				// Should start processing (likely PrerequisiteFailed in Kind cluster without OpenShift)
-				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "PrerequisiteFailed", "ReviewRequired"),
-					"Should transition to processing phases")
+				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "PrerequisiteFailed", "ReviewRequired", "Completed"),
+					"Should transition to processing or terminal phases")
 
 				// Verify Ignored condition is now False
 				ignoredCond := findCondition(status.Conditions, "Ignored")
@@ -887,8 +896,8 @@ spec:
 				status := getVirtPlatformConfigStatus("example-profile")
 				g.Expect(status.Phase).NotTo(Equal("Ignored"),
 					"Should exit Ignored phase when action changes")
-				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "ReviewRequired", "PrerequisiteFailed", "Failed"),
-					"Should transition to a processing phase")
+				g.Expect(status.Phase).To(BeElementOf("Pending", "Drafting", "ReviewRequired", "Completed", "PrerequisiteFailed", "Failed"),
+					"Should transition to a processing or terminal phase")
 			}).Should(Succeed())
 		})
 
@@ -912,7 +921,7 @@ spec:
 			By("waiting for plan generation")
 			Eventually(func(g Gomega) {
 				status := getVirtPlatformConfigStatus("example-profile")
-				g.Expect(status.Phase).To(BeElementOf("Drafting", "ReviewRequired", "PrerequisiteFailed"))
+				g.Expect(status.Phase).To(BeElementOf("Drafting", "ReviewRequired", "Completed", "PrerequisiteFailed"))
 				g.Expect(status.Items).NotTo(BeEmpty(), "Should have generated plan items")
 			}).Should(Succeed())
 
@@ -1632,8 +1641,8 @@ spec:
 			By("verifying load-aware is in processing phase")
 			Eventually(func(g Gomega) {
 				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
-				g.Expect(status.Phase).To(BeElementOf("Drafting", "PrerequisiteFailed", "ReviewRequired"),
-					"load-aware should be processing")
+				g.Expect(status.Phase).To(BeElementOf("Drafting", "PrerequisiteFailed", "ReviewRequired", "Completed"),
+					"load-aware should be processing or completed")
 			}).Should(Succeed())
 
 			By("verifying virt-higher-density is Ignored")
@@ -1749,6 +1758,135 @@ spec:
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("true"))
 			}).Should(Succeed())
+		})
+	})
+
+	Context("MachineConfigPool Watch Integration", func() {
+		It("should detect MCP convergence through watch events", func() {
+			Skip("This test requires a real OpenShift cluster with MachineConfigPool and takes 10+ minutes for node convergence")
+
+			By("applying a VirtPlatformConfig with PSI enabled (creates MachineConfig)")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: Apply
+  failurePolicy: Abort
+  options:
+    loadAware:
+      enablePSIMetrics: true
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for plan to be generated")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				g.Expect(status.Phase).To(BeElementOf("Drafting", "InProgress", "Completed"))
+			}, 2*time.Minute).Should(Succeed())
+
+			By("verifying it reaches InProgress when applying MachineConfig")
+			var sawInProgress bool
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+
+				if status.Phase == "InProgress" {
+					sawInProgress = true
+					// Check for MachineConfig item
+					hasMachineConfigItem := false
+					for _, item := range status.Items {
+						if strings.Contains(item.Name, "psi") {
+							hasMachineConfigItem = true
+							g.Expect(item.Message).To(ContainSubstring("MachineConfigPool"))
+						}
+					}
+					g.Expect(hasMachineConfigItem).To(BeTrue(), "Should have PSI MachineConfig item")
+				}
+
+				// Eventually should reach Completed when MCP converges
+				// This validates that the MCP watch triggered reconciliation
+				g.Expect(status.Phase).To(BeElementOf("InProgress", "Completed"))
+			}, 15*time.Minute, 10*time.Second).Should(Succeed())
+
+			By("verifying final Completed state after MCP convergence")
+			if sawInProgress {
+				// If we saw InProgress, verify the MCP watch triggered completion
+				Eventually(func(g Gomega) {
+					status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+					g.Expect(status.Phase).To(Equal("Completed"))
+
+					// Verify MachineConfig item is completed
+					foundPSIItem := false
+					for _, item := range status.Items {
+						if strings.Contains(item.Name, "psi") {
+							foundPSIItem = true
+							g.Expect(item.Message).To(ContainSubstring("ready"),
+								"MachineConfig should report MCP as ready")
+						}
+					}
+					g.Expect(foundPSIItem).To(BeTrue())
+				}, 5*time.Minute, 10*time.Second).Should(Succeed())
+			}
+		})
+
+		It("should skip to Completed when cluster already in desired state", func() {
+			By("deploying descheduler operator if needed")
+			// If resources already exist with desired state, should skip ReviewRequired → Completed
+
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    loadAware:
+      enablePSIMetrics: false
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("waiting for plan generation")
+			Eventually(func(g Gomega) {
+				status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+				// Should reach terminal state
+				g.Expect(status.Phase).To(BeElementOf("ReviewRequired", "Completed", "PrerequisiteFailed"))
+			}, 2*time.Minute).Should(Succeed())
+
+			By("checking if all diffs show no changes")
+			status := getVirtPlatformConfigStatus("load-aware-rebalancing")
+
+			allNoChanges := true
+			for _, item := range status.Items {
+				if !strings.Contains(item.Diff, "(no changes)") && item.Diff != "" {
+					allNoChanges = false
+					break
+				}
+			}
+
+			if allNoChanges && len(status.Items) > 0 {
+				By("verifying smart transition to Completed (skipping unnecessary ReviewRequired)")
+				// Should skip ReviewRequired and go straight to Completed
+				// when all diffs show "(no changes)"
+				Expect(status.Phase).To(Equal("Completed"),
+					"When all diffs show no changes, should skip ReviewRequired and go to Completed")
+			} else {
+				By("resources need changes, should be in ReviewRequired or PrerequisiteFailed")
+				// In Kind cluster without OpenShift CRDs, will be PrerequisiteFailed
+				// In real OpenShift cluster with CRDs, will be ReviewRequired
+				Expect(status.Phase).To(BeElementOf("ReviewRequired", "PrerequisiteFailed"),
+					"Should be in ReviewRequired (if CRDs exist) or PrerequisiteFailed (if CRDs missing)")
+			}
 		})
 	})
 })

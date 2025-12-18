@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -27,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -45,7 +47,7 @@ import (
 
 const (
 	// OperatorVersion is the current version of the operator logic
-	OperatorVersion = "v0.1.0"
+	OperatorVersion = "v0.1.31"
 )
 
 // Condition types
@@ -321,6 +323,34 @@ func (r *VirtPlatformConfigReconciler) ensureImpactLevel(ctx context.Context, co
 	return nil
 }
 
+// isNoChangeDiff checks if a diff string indicates no actual changes
+// Returns true if the diff shows "(no changes)" pattern
+func isNoChangeDiff(diff string) bool {
+	// Common patterns for "no changes" diffs:
+	// - "(no changes)"
+	// - Empty diff
+	// - Only header lines with no actual changes
+	if diff == "" {
+		return true
+	}
+	if strings.Contains(diff, "(no changes)") {
+		return true
+	}
+	// If diff has no + or - lines (only --- and +++ headers), no changes
+	lines := strings.Split(diff, "\n")
+	hasChanges := false
+	for _, line := range lines {
+		if len(line) > 0 && (line[0] == '+' || line[0] == '-') {
+			// Exclude header lines (---, +++)
+			if !strings.HasPrefix(line, "---") && !strings.HasPrefix(line, "+++") {
+				hasChanges = true
+				break
+			}
+		}
+	}
+	return !hasChanges
+}
+
 // handlePendingPhase initializes a new VirtPlatformConfig
 func (r *VirtPlatformConfigReconciler) handlePendingPhase(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
@@ -402,6 +432,71 @@ func (r *VirtPlatformConfigReconciler) handleDraftingPhase(ctx context.Context, 
 		return err
 	}
 
+	// Check if there are any actual changes to apply
+	// If all diffs show "(no changes)", the cluster is already in desired state
+	hasChanges := false
+	for _, item := range configPlan.Status.Items {
+		// Check if diff indicates actual changes
+		// Diffs showing "(no changes)" mean the resource is already in desired state
+		if !isNoChangeDiff(item.Diff) {
+			hasChanges = true
+			break
+		}
+	}
+
+	// If no changes needed, check if resources are healthy and skip to Completed
+	if !hasChanges {
+		logger.Info("No configuration changes needed - cluster already in desired state")
+
+		// For resources that require health monitoring (e.g., MachineConfig),
+		// verify they're actually healthy before marking as completed
+		allHealthy := true
+		waitManager := plan.NewWaitStrategyManager()
+
+		for i := range configPlan.Status.Items {
+			item := &configPlan.Status.Items[i]
+
+			// Check health for items that need it
+			msg, healthy, needsWait, healthErr := waitManager.CheckHealthy(ctx, r.Client, item)
+			if healthErr != nil {
+				logger.Error(healthErr, "Failed to check health for no-change item", "item", item.Name)
+				// Don't fail the whole plan, but mark this item as needing attention
+				allHealthy = false
+				item.State = advisorv1alpha1.ItemStatePending
+				item.Message = fmt.Sprintf("Health check failed: %v", healthErr)
+				continue
+			}
+
+			if needsWait && !healthy {
+				logger.Info("Resource exists but not yet healthy", "item", item.Name, "status", msg)
+				allHealthy = false
+				item.State = advisorv1alpha1.ItemStateInProgress
+				item.Message = msg
+			} else {
+				// Resource is healthy or doesn't need health monitoring
+				item.State = advisorv1alpha1.ItemStateCompleted
+				item.Message = "Already in desired state"
+			}
+		}
+
+		// Update status with health check results
+		if err := r.Status().Update(ctx, configPlan); err != nil {
+			return fmt.Errorf("failed to update status with health checks: %w", err)
+		}
+
+		// If all resources are healthy, go straight to Completed
+		if allHealthy {
+			return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseCompleted,
+				"Configuration already in desired state - no changes needed")
+		}
+
+		// Some resources exist but aren't healthy yet (e.g., MCP still rolling out)
+		// Go to InProgress to monitor them
+		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseInProgress,
+			"Resources exist but still converging to desired state")
+	}
+
+	// There are changes to apply - follow normal flow
 	// Move to ReviewRequired phase (for DryRun) or InProgress (for Apply)
 	if configPlan.Spec.Action == advisorv1alpha1.PlanActionDryRun {
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseReviewRequired,
@@ -736,6 +831,55 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 		logger.Info("Options have changed, regenerating plan")
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseDrafting,
 			"Options changed - regenerating plan")
+	}
+
+	// Check health of MachineConfig items - the MCP might be updating due to other profiles
+	// This prevents marking as Completed when MCP is still converging
+	waitManager := plan.NewWaitStrategyManager()
+	needsRequeue := false
+	statusChanged := false
+
+	for i := range configPlan.Status.Items {
+		item := &configPlan.Status.Items[i]
+
+		// Only check completed items with health monitoring (e.g., MachineConfig)
+		if item.State != advisorv1alpha1.ItemStateCompleted {
+			continue
+		}
+
+		// Check if this item needs health monitoring
+		msg, healthy, needsWait, healthErr := waitManager.CheckHealthy(ctx, r.Client, item)
+		if healthErr != nil {
+			logger.Error(healthErr, "Failed to check health in Completed phase", "item", item.Name)
+			continue
+		}
+
+		// If item needs health monitoring and is not healthy, transition back to InProgress
+		if needsWait && !healthy {
+			logger.Info("MachineConfig item not healthy in Completed phase - MCP is updating",
+				"item", item.Name,
+				"status", msg)
+			item.State = advisorv1alpha1.ItemStateInProgress
+			item.Message = msg
+			needsRequeue = true
+			statusChanged = true
+		}
+	}
+
+	// If any items are not healthy, update status and transition to InProgress
+	if needsRequeue {
+		if err := r.Status().Update(ctx, configPlan); err != nil {
+			return fmt.Errorf("failed to update item health status: %w", err)
+		}
+		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseInProgress,
+			"MachineConfigPool is updating - waiting for convergence")
+	}
+
+	// Update status if health messages changed
+	if statusChanged {
+		if err := r.Status().Update(ctx, configPlan); err != nil {
+			return err
+		}
 	}
 
 	// First check if any items already have drift detected (from InProgress phase monitoring)
@@ -1079,11 +1223,14 @@ func (r *VirtPlatformConfigReconciler) setPhaseConditions(configPlan *advisorv1a
 
 	case advisorv1alpha1.PlanPhaseCompleted:
 		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
-		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonCompleted, MessageCompletedSuccess)
-		r.clearAllActiveConditions(configPlan, ReasonCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompleted)
+		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedSuccess)
 		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionTrue, ReasonCompleted, MessageCompletedSuccess)
 		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
-		r.clearAllErrorConditions(configPlan, ReasonCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionFalse, ReasonCompleted, "All prerequisites met")
+		r.setCondition(configPlan, ConditionTypeFailed, metav1.ConditionFalse, ReasonCompleted, "No failures occurred")
 
 	case advisorv1alpha1.PlanPhaseDrifted:
 		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
@@ -1432,6 +1579,65 @@ func (r *VirtPlatformConfigReconciler) initializeAdvertisedProfiles(ctx context.
 		"skipped", skippedCount)
 }
 
+// enqueueMachineConfigPoolOwners returns an event handler that maps MachineConfigPool events
+// to reconciliation requests for VirtPlatformConfigs that have MachineConfig items targeting that pool.
+func (r *VirtPlatformConfigReconciler) enqueueMachineConfigPoolOwners() handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		logger := log.FromContext(ctx)
+
+		// Get the MachineConfigPool name (e.g., "worker", "master")
+		poolName := obj.GetName()
+
+		logger.V(1).Info("MachineConfigPool changed, finding related VirtPlatformConfigs",
+			"pool", poolName)
+
+		// List all VirtPlatformConfigs to find which ones have MachineConfig items for this pool
+		configList := &advisorv1alpha1.VirtPlatformConfigList{}
+		if err := r.List(ctx, configList); err != nil {
+			logger.Error(err, "Failed to list VirtPlatformConfigs for MachineConfigPool event")
+			return nil
+		}
+
+		var requests []reconcile.Request
+		for _, config := range configList.Items {
+			// Skip if not in a phase that cares about MCP status
+			if config.Status.Phase != advisorv1alpha1.PlanPhaseInProgress &&
+				config.Status.Phase != advisorv1alpha1.PlanPhaseCompleted &&
+				config.Status.Phase != advisorv1alpha1.PlanPhaseDrafting {
+				continue
+			}
+
+			// Check if any item is a MachineConfig targeting this pool
+			for _, item := range config.Status.Items {
+				if item.TargetRef.Kind == "MachineConfig" {
+					// MachineConfigs are labeled with the pool they target
+					// e.g., "machineconfiguration.openshift.io/role: worker"
+					// We need to check if this MC's desired state has a label matching the pool
+
+					// For simplicity, we can check if the item is InProgress or recently completed
+					// and enqueue the VirtPlatformConfig to let it check health
+					if item.State == advisorv1alpha1.ItemStateInProgress ||
+						item.State == advisorv1alpha1.ItemStateCompleted {
+						logger.Info("Enqueuing VirtPlatformConfig due to MachineConfigPool change",
+							"virtplatformconfig", config.Name,
+							"pool", poolName,
+							"machineConfigItem", item.Name)
+						requests = append(requests, reconcile.Request{
+							NamespacedName: types.NamespacedName{
+								Name: config.Name,
+								// VirtPlatformConfig is cluster-scoped
+							},
+						})
+						break // Only enqueue once per VirtPlatformConfig
+					}
+				}
+			}
+		}
+
+		return requests
+	})
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	logger := mgr.GetLogger().WithName("setup")
@@ -1509,6 +1715,34 @@ func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error 
 	logger.Info("Dynamic watch setup complete",
 		"registeredWatches", registeredWatchCount,
 		"skippedWatches", skippedWatchCount)
+
+	// Register watch for MachineConfigPool (for health monitoring of MachineConfig items)
+	// MachineConfigs don't directly expose their convergence status - we need to watch
+	// the MachineConfigPool that processes them to know when nodes have been updated
+	mcpGVK := schema.GroupVersionKind{
+		Group:   "machineconfiguration.openshift.io",
+		Version: "v1",
+		Kind:    "MachineConfigPool",
+	}
+	mcpCRDName := discovery.GVKToCRDName(mcpGVK)
+	mcpExists, err := crdChecker.CRDExists(ctx, mcpCRDName)
+	if err == nil && mcpExists {
+		logger.Info("Registering watch for MachineConfigPool (health monitoring)",
+			"group", mcpGVK.Group,
+			"version", mcpGVK.Version,
+			"kind", mcpGVK.Kind)
+
+		mcpResource := &unstructured.Unstructured{}
+		mcpResource.SetGroupVersionKind(mcpGVK)
+
+		controllerBuilder = controllerBuilder.Watches(
+			mcpResource,
+			r.enqueueMachineConfigPoolOwners(),
+		)
+	} else {
+		logger.Info("MachineConfigPool CRD not available, skipping health monitoring watch",
+			"note", "MachineConfig health checks will not auto-update")
+	}
 
 	// Initialize advertised profiles using direct client (no cache dependency)
 	// In production with proper RBAC, this works immediately during setup.
