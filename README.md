@@ -85,6 +85,14 @@ kubectl delete -f config/samples/loadaware_sample.yaml
 make kind-delete  # Delete the Kind cluster
 ```
 
+**For a complete workflow walkthrough**, see [Workflow Example](docs/WORKFLOW_EXAMPLE.md) which provides a real-world example covering:
+- Profile discovery and initial setup
+- DryRun preview with prerequisite validation
+- Plan review with detailed diffs
+- Applying configurations and monitoring progress
+- Drift detection and resolution workflows
+- Complete lifecycle from Ignored → Completed phases
+
 **For a comprehensive testing guide**, see [Testing on Kind](docs/TESTING_ON_KIND.md) which covers:
 - Step-by-step testing workflow with detailed explanations
 - Testing custom configuration options
