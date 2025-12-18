@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -120,7 +121,7 @@ func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisit
 		},
 		{
 			GVK:         HyperConvergedGVK,
-			Description: "HyperConverged CRD is required to read migration limits for eviction tuning (typically available on OpenShift with CNV)",
+			Description: "Please install OpenShift Virtualization via OLM",
 		},
 	}
 }
@@ -188,14 +189,7 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
 		}
 	}
 
-	// Item 1: Configure KubeDescheduler
-	deschedulerItem, err := p.generateDeschedulerItem(ctx, c, deschedulingInterval, configOverrides)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate descheduler item: %w", err)
-	}
-	items = append(items, deschedulerItem)
-
-	// Item 2: Configure MachineConfig for PSI metrics (if enabled)
+	// Item 1: Configure MachineConfig for PSI metrics (if enabled)
 	if enablePSI {
 		mcItem, err := p.generateMachineConfigItem(ctx, c)
 		if err != nil {
@@ -203,6 +197,13 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
 		}
 		items = append(items, mcItem)
 	}
+
+	// Item 2: Configure KubeDescheduler
+	deschedulerItem, err := p.generateDeschedulerItem(ctx, c, deschedulingInterval, configOverrides)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate descheduler item: %w", err)
+	}
+	items = append(items, deschedulerItem)
 
 	return items, nil
 }
@@ -522,14 +523,22 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 			"devDeviationThresholds":         devThresholds,
 		}
 
-		// Set evictionLimits as a nested structure
+		spec["profileCustomizations"] = profileCustomizations
+
+		// Set evictionLimits at spec level
+		// Note: The "node" field was added in later versions. Check if CRD supports it.
+		supportsNodeLimit, err := p.crdSupportsEvictionLimitNode(ctx, c)
+		if err != nil {
+			return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to check CRD schema: %w", err)
+		}
+
 		evictionLimits := map[string]interface{}{
 			"total": int64(totalLimit),
-			"node":  int64(nodeLimit),
 		}
-		profileCustomizations["evictionLimits"] = evictionLimits
-
-		spec["profileCustomizations"] = profileCustomizations
+		if supportsNodeLimit {
+			evictionLimits["node"] = int64(nodeLimit)
+		}
+		spec["evictionLimits"] = evictionLimits
 	}
 
 	if err := unstructured.SetNestedMap(desired.Object, spec, "spec"); err != nil {
@@ -539,7 +548,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	// Determine managed fields based on whether profileCustomizations is set
 	managedFields := []string{"spec.deschedulingIntervalSeconds", "spec.mode", "spec.profiles"}
 	if profile == profileKubeVirtRelieveAndMigrate || profile == profileDevKubeVirtRelieveAndMigrate {
-		managedFields = append(managedFields, "spec.profileCustomizations")
+		managedFields = append(managedFields, "spec.profileCustomizations", "spec.evictionLimits")
 	}
 
 	// Use the builder to create the item with SSA-generated diff
@@ -595,6 +604,48 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 		WithImpact(impact).
 		WithMessage(message).
 		Build()
+}
+
+// crdSupportsEvictionLimitNode checks if the KubeDescheduler CRD supports the node field in evictionLimits
+// The node field was added in later versions (v5.32+), earlier versions only support total
+func (p *LoadAwareRebalancingProfile) crdSupportsEvictionLimitNode(ctx context.Context, c client.Client) (bool, error) {
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	crdName := "kubedeschedulers.operator.openshift.io"
+
+	err := c.Get(ctx, client.ObjectKey{Name: crdName}, crd)
+	if err != nil {
+		return false, fmt.Errorf("failed to get CRD %s: %w", crdName, err)
+	}
+
+	// Look through all versions of the CRD
+	for _, version := range crd.Spec.Versions {
+		if version.Schema == nil || version.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+
+		// Navigate to spec.evictionLimits.properties.node
+		schema := version.Schema.OpenAPIV3Schema
+		if schema.Properties == nil {
+			continue
+		}
+
+		specProps, ok := schema.Properties["spec"]
+		if !ok || specProps.Properties == nil {
+			continue
+		}
+
+		evictionLimits, ok := specProps.Properties["evictionLimits"]
+		if !ok || evictionLimits.Properties == nil {
+			continue
+		}
+
+		// Check if "node" field exists
+		if _, hasNode := evictionLimits.Properties["node"]; hasNode {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // GetDescription returns a human-readable description of this profile

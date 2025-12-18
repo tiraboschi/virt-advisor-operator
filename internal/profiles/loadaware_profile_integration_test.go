@@ -173,30 +173,17 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 	})
 
 	Describe("GeneratePlanItems with default configuration", func() {
-		It("should generate 2 plan items (KubeDescheduler + MachineConfig)", func() {
+		It("should generate 2 plan items (MachineConfig + KubeDescheduler)", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(items).To(HaveLen(2), "should generate KubeDescheduler and MachineConfig items")
-		})
-
-		It("should create KubeDescheduler item with correct properties", func() {
-			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
-			Expect(err).NotTo(HaveOccurred())
-
-			deschedulerItem := items[0]
-			Expect(deschedulerItem.Name).To(Equal("enable-load-aware-descheduling"))
-			Expect(deschedulerItem.TargetRef.Kind).To(Equal("KubeDescheduler"))
-			Expect(deschedulerItem.TargetRef.APIVersion).To(Equal("operator.openshift.io/v1"))
-			Expect(deschedulerItem.TargetRef.Name).To(Equal("cluster"))
-			Expect(deschedulerItem.TargetRef.Namespace).To(Equal("openshift-kube-descheduler-operator"), "KubeDescheduler is namespaced")
-			Expect(deschedulerItem.State).To(Equal(advisorv1alpha1.ItemStatePending))
+			Expect(items).To(HaveLen(2), "should generate MachineConfig and KubeDescheduler items")
 		})
 
 		It("should create MachineConfig item with correct properties", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			mcItem := items[1]
+			mcItem := items[0]
 			Expect(mcItem.Name).To(Equal("enable-psi-metrics"))
 			Expect(mcItem.TargetRef.Kind).To(Equal("MachineConfig"))
 			Expect(mcItem.TargetRef.APIVersion).To(Equal("machineconfiguration.openshift.io/v1"))
@@ -205,11 +192,24 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(mcItem.State).To(Equal(advisorv1alpha1.ItemStatePending))
 		})
 
+		It("should create KubeDescheduler item with correct properties", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
+			Expect(err).NotTo(HaveOccurred())
+
+			deschedulerItem := items[1]
+			Expect(deschedulerItem.Name).To(Equal("enable-load-aware-descheduling"))
+			Expect(deschedulerItem.TargetRef.Kind).To(Equal("KubeDescheduler"))
+			Expect(deschedulerItem.TargetRef.APIVersion).To(Equal("operator.openshift.io/v1"))
+			Expect(deschedulerItem.TargetRef.Name).To(Equal("cluster"))
+			Expect(deschedulerItem.TargetRef.Namespace).To(Equal("openshift-kube-descheduler-operator"), "KubeDescheduler is namespaced")
+			Expect(deschedulerItem.State).To(Equal(advisorv1alpha1.ItemStatePending))
+		})
+
 		It("should generate SSA-based unified diff for KubeDescheduler", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).NotTo(BeEmpty(), "diff should be generated")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("---"), "should be unified diff format")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("+++"), "should be unified diff format")
@@ -220,7 +220,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("deschedulingIntervalSeconds"), "should show interval field")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should show default interval value")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("profiles"), "should show profiles field")
@@ -232,7 +232,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			mcItem := items[1]
+			mcItem := items[0]
 			Expect(mcItem.Diff).To(ContainSubstring("kernelArguments"), "should show kernel arguments field")
 			Expect(mcItem.Diff).To(ContainSubstring("psi=1"), "should show PSI kernel arg")
 			Expect(mcItem.Diff).To(ContainSubstring("machineconfiguration.openshift.io/role"), "should show role label")
@@ -243,28 +243,28 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			mcItem := items[0]
+			Expect(mcItem.ManagedFields).To(ConsistOf(
+				"spec.kernelArguments",
+			))
+
+			deschedulerItem := items[1]
 			// For KubeVirt profiles, profileCustomizations is also managed
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.deschedulingIntervalSeconds"))
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.profiles"))
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.profileCustomizations"))
-
-			mcItem := items[1]
-			Expect(mcItem.ManagedFields).To(ConsistOf(
-				"spec.kernelArguments",
-			))
 		})
 
 		It("should set appropriate messages", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			mcItem := items[0]
+			Expect(mcItem.Message).To(ContainSubstring("PSI metrics"))
+
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Message).To(ContainSubstring("KubeDescheduler"))
 			Expect(deschedulerItem.Message).To(ContainSubstring("profile"))
-
-			mcItem := items[1]
-			Expect(mcItem.Message).To(ContainSubstring("PSI metrics"))
 		})
 
 		It("should set impact severity for new resources", func() {
@@ -276,7 +276,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 				Expect(item.ImpactSeverity).NotTo(BeEmpty())
 			}
 
-			mcItem := items[1]
+			mcItem := items[0]
 			Expect(mcItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactHigh), "MachineConfig requires node reboot")
 		})
 	})
@@ -288,7 +288,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("3600"), "should use custom interval")
 		})
 
@@ -300,7 +300,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 					"deschedulingIntervalSeconds": interval,
 				})
 				Expect(err).NotTo(HaveOccurred())
-				Expect(items[0].Diff).To(ContainSubstring(interval), "should use interval: %s", interval)
+				Expect(items[1].Diff).To(ContainSubstring(interval), "should use interval: %s", interval)
 			}
 		})
 
@@ -310,7 +310,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should fall back to default 60")
 		})
 
@@ -320,7 +320,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should fall back to default 60")
 		})
 	})
@@ -393,7 +393,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			// Should include profileCustomizations fields in the diff
 			Expect(deschedulerItem.Diff).To(ContainSubstring("profileCustomizations"), "should set profileCustomizations")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("devEnableEvictionsInBackground"), "should set devEnableEvictionsInBackground")
@@ -404,7 +404,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`devEnableEvictionsInBackground.*true`), "should set to true")
 		})
 
@@ -412,7 +412,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`devEnableSoftTainter.*true`), "should set to true")
 		})
 
@@ -420,7 +420,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("devDeviationThresholds"), "should include devDeviationThresholds field")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("AsymmetricLow"), "should use default value")
 		})
@@ -431,7 +431,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("devDeviationThresholds"), "should include devDeviationThresholds field")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("High"), "should use provided value")
 			Expect(deschedulerItem.Diff).NotTo(ContainSubstring("AsymmetricLow"), "should not use default value")
@@ -441,7 +441,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.profileCustomizations"), "should manage profileCustomizations")
 		})
 
@@ -452,7 +452,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("7200"), "should use custom interval")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("Medium"), "should use custom deviation thresholds")
 		})
@@ -478,7 +478,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			// Should show adding the KubeVirt profile
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`KubeVirtRelieveAndMigrate|DevKubeVirtRelieveAndMigrate|LongLifecycle`))
 			// Should not have any other profiles
@@ -496,7 +496,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("AffinityAndTaints"), "should preserve AffinityAndTaints")
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`KubeVirtRelieveAndMigrate|DevKubeVirtRelieveAndMigrate|LongLifecycle`), "should add KubeVirt profile")
 		})
@@ -511,7 +511,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("SoftTopologyAndDuplicates"), "should preserve SoftTopologyAndDuplicates")
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`KubeVirtRelieveAndMigrate|DevKubeVirtRelieveAndMigrate|LongLifecycle`), "should add KubeVirt profile")
 		})
@@ -526,7 +526,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("AffinityAndTaints"), "should preserve AffinityAndTaints")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("SoftTopologyAndDuplicates"), "should preserve SoftTopologyAndDuplicates")
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`KubeVirtRelieveAndMigrate|DevKubeVirtRelieveAndMigrate|LongLifecycle`), "should add KubeVirt profile")
@@ -542,7 +542,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			// Should show removing the old profiles
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`-.*LifecycleAndUtilization`), "should remove LifecycleAndUtilization")
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`-.*TopologyAndDuplicates`), "should remove TopologyAndDuplicates")
@@ -560,7 +560,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			// Should preserve AffinityAndTaints
 			Expect(deschedulerItem.Diff).To(ContainSubstring("AffinityAndTaints"))
 			// Should remove other profiles
@@ -580,7 +580,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			// Should preserve SoftTopologyAndDuplicates
 			Expect(deschedulerItem.Diff).To(ContainSubstring("SoftTopologyAndDuplicates"))
 			// Should remove other profiles
@@ -626,7 +626,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("LongLifecycle"), "should use LongLifecycle profile")
 			Expect(deschedulerItem.Diff).NotTo(ContainSubstring("KubeVirtRelieveAndMigrate"), "should not have KubeVirtRelieveAndMigrate")
 			Expect(deschedulerItem.Diff).NotTo(ContainSubstring("DevKubeVirtRelieveAndMigrate"), "should not have DevKubeVirtRelieveAndMigrate")
@@ -642,7 +642,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("DevKubeVirtRelieveAndMigrate"), "should use DevKubeVirtRelieveAndMigrate profile")
 			Expect(deschedulerItem.Diff).NotTo(MatchRegexp(`- KubeVirtRelieveAndMigrate\s*$`), "should not have KubeVirtRelieveAndMigrate GA (not available in v514)")
 
@@ -660,7 +660,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("DevKubeVirtRelieveAndMigrate"), "should use DevKubeVirtRelieveAndMigrate profile")
 			Expect(deschedulerItem.Diff).NotTo(MatchRegexp(`- KubeVirtRelieveAndMigrate\s*$`), "should not have KubeVirtRelieveAndMigrate GA (not available in v521)")
 
@@ -675,7 +675,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(MatchRegexp(`- KubeVirtRelieveAndMigrate\s*$`), "should use KubeVirtRelieveAndMigrate profile (GA)")
 			Expect(deschedulerItem.Diff).NotTo(MatchRegexp(`- DevKubeVirtRelieveAndMigrate\s*$`), "should not use dev preview version when GA is available")
 
@@ -699,7 +699,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 				})
 				Expect(err).NotTo(HaveOccurred())
 
-				deschedulerItem := items[0]
+				deschedulerItem := items[1]
 				Expect(deschedulerItem.Diff).To(ContainSubstring(customThreshold), "version %s should use custom devDeviationThresholds", version)
 				Expect(deschedulerItem.Diff).NotTo(ContainSubstring("AsymmetricLow"), "version %s should not use default value", version)
 			}
@@ -713,7 +713,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("LongLifecycle"), "should use LongLifecycle")
 			// Even with override, LongLifecycle should not get profileCustomizations
 			Expect(deschedulerItem.Diff).NotTo(ContainSubstring("profileCustomizations"), "should not set profileCustomizations for LongLifecycle")
@@ -1097,7 +1097,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(items).To(HaveLen(2))
 
 			// Check KubeDescheduler item
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Name).To(Equal("enable-load-aware-descheduling"))
 
 			// Verify eviction limits are in the diff as nested structure
@@ -1118,7 +1118,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			deschedulerItem := items[0]
+			deschedulerItem := items[1]
 			Expect(deschedulerItem.Diff).To(ContainSubstring("15"), "should show user total value")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("8"), "should show user node value")
 		})

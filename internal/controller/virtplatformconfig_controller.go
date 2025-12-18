@@ -248,7 +248,7 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 			}
 			// Prerequisites still missing, check periodically
 			logger.Info("Prerequisites not met, will retry periodically")
-			return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+			return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
 		}
 	default:
 		logger.Info("Unknown phase, resetting to Pending", "phase", configPlan.Status.Phase)
@@ -362,6 +362,8 @@ func (r *VirtPlatformConfigReconciler) handlePendingPhase(ctx context.Context, c
 }
 
 // handleDraftingPhase generates the plan items from the profile
+//
+//nolint:gocognit // Drafting phase is inherently complex due to state validation logic
 func (r *VirtPlatformConfigReconciler) handleDraftingPhase(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Drafting phase", "profile", configPlan.Spec.Profile)
@@ -497,9 +499,20 @@ func (r *VirtPlatformConfigReconciler) handleDraftingPhase(ctx context.Context, 
 			"Resources exist but still converging to desired state")
 	}
 
+	// Check if this regeneration was triggered by input dependency drift
+	inputDriftTriggered := false
+	for _, cond := range configPlan.Status.Conditions {
+		if cond.Type == "InputDependencyDrift" && cond.Status == metav1.ConditionTrue {
+			inputDriftTriggered = true
+			break
+		}
+	}
+
 	// There are changes to apply - follow normal flow
 	// Move to ReviewRequired phase (for DryRun) or InProgress (for Apply)
-	if configPlan.Spec.Action == advisorv1alpha1.PlanActionDryRun {
+	// IMPORTANT: If regeneration was triggered by input drift, ALWAYS require review
+	if configPlan.Spec.Action == advisorv1alpha1.PlanActionDryRun || inputDriftTriggered {
+		// Keep the InputDependencyDrift marker - it will be cleared in ReviewRequired after user acknowledges
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseReviewRequired,
 			"Plan ready for review. Change action to 'Apply' to execute.")
 	}
@@ -512,6 +525,63 @@ func (r *VirtPlatformConfigReconciler) handleDraftingPhase(ctx context.Context, 
 func (r *VirtPlatformConfigReconciler) handleReviewRequiredPhase(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling ReviewRequired phase")
+
+	// Check if this ReviewRequired was triggered by input dependency drift
+	inputDriftTriggered := false
+	for _, cond := range configPlan.Status.Conditions {
+		if cond.Type == "InputDependencyDrift" && cond.Status == metav1.ConditionTrue {
+			inputDriftTriggered = true
+			break
+		}
+	}
+
+	// If triggered by input drift, check if drift still exists or has been resolved
+	if inputDriftTriggered {
+		// Only check drift resolution if we have a Descheduler item to verify against
+		// (without it, we can't actually check if HCO matches what's applied)
+		deschedulerItem := r.findDeschedulerItem(configPlan)
+		if deschedulerItem != nil {
+			// Check if HCO dependencies have changed again (could have been reverted)
+			changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan)
+
+			if !changed {
+				// HCO is now back in sync with what's applied - drift resolved
+				// Regenerate plan to reflect current state before transitioning to Completed
+				logger.Info("Input dependency drift resolved - HCO now matches applied configuration, regenerating plan")
+				r.setCondition(configPlan, "InputDependencyDrift", metav1.ConditionFalse, "DriftResolved",
+					"Input dependency drift resolved - external changes reverted")
+				if err := r.Status().Update(ctx, configPlan); err != nil {
+					return err
+				}
+				return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending,
+					"Regenerating plan after drift resolution")
+			}
+
+			// HCO still different from what's applied - continue waiting for acknowledgment
+			logger.Info("Input dependency drift detected - waiting for user acknowledgment",
+				"reason", reason,
+				"hint", "Please review the updated plan and toggle action (DryRun->Apply) or modify spec to acknowledge")
+		} else {
+			// No Descheduler item - can't verify drift resolution, wait for user acknowledgment
+			logger.Info("Input dependency drift detected - waiting for user acknowledgment",
+				"hint", "Please review the updated plan and toggle action (DryRun->Apply) or modify spec to acknowledge")
+		}
+
+		// Require user acknowledgment by checking if spec has changed
+		// User must change action to DryRun->Apply OR modify any spec field to bump generation
+		if configPlan.Status.ObservedGeneration == configPlan.Generation {
+			return nil
+		}
+
+		// User has modified spec (generation changed) - clear the drift marker and proceed
+		logger.Info("User acknowledged input dependency drift, clearing marker")
+		r.setCondition(configPlan, "InputDependencyDrift", metav1.ConditionFalse, "Acknowledged",
+			"User acknowledged input dependency change")
+		if err := r.Status().Update(ctx, configPlan); err != nil {
+			logger.Error(err, "Failed to clear InputDependencyDrift marker")
+			return err
+		}
+	}
 
 	// Check if user has changed action to Apply
 	if configPlan.Spec.Action == advisorv1alpha1.PlanActionApply {
@@ -823,6 +893,8 @@ func (r *VirtPlatformConfigReconciler) handleInProgressPhase(ctx context.Context
 }
 
 // handleCompletedPhase monitors for drift
+//
+//nolint:gocognit // Completed phase is inherently complex due to drift detection and health monitoring logic
 func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Handling Completed phase - monitoring for drift")
@@ -837,8 +909,14 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 	// Check if HCO-derived input dependencies have changed (for load-aware profile)
 	if changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan); changed {
 		logger.Info("HCO input dependencies changed, regenerating plan", "reason", reason)
+		// Set a special marker to force review after regeneration
+		r.setCondition(configPlan, "InputDependencyDrift", metav1.ConditionTrue, "InputChanged",
+			fmt.Sprintf("Input dependency changed: %s", reason))
+		if err := r.Status().Update(ctx, configPlan); err != nil {
+			return err
+		}
 		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseDrafting,
-			fmt.Sprintf("HCO input dependency changed: %s", reason))
+			fmt.Sprintf("Regenerating plan due to input dependency change: %s", reason))
 	}
 
 	// Check health of MachineConfig items - the MCP might be updating due to other profiles
@@ -1457,15 +1535,20 @@ func (r *VirtPlatformConfigReconciler) extractAppliedEvictionLimits(ctx context.
 		return 0, 0, fmt.Errorf("failed to get descheduler: %w", err)
 	}
 
-	// Extract evictionLimits from spec.profileCustomizations
-	total, _, err := unstructured.NestedInt64(descheduler.Object, "spec", "profileCustomizations", "evictionLimits", "total")
+	// Extract evictionLimits from spec.evictionLimits (not profileCustomizations)
+	total, _, err := unstructured.NestedInt64(descheduler.Object, "spec", "evictionLimits", "total")
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to extract evictionLimits.total: %w", err)
 	}
 
-	node, _, err := unstructured.NestedInt64(descheduler.Object, "spec", "profileCustomizations", "evictionLimits", "node")
+	// Note: node field may not exist in older Descheduler CRD versions
+	node, found, err := unstructured.NestedInt64(descheduler.Object, "spec", "evictionLimits", "node")
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to extract evictionLimits.node: %w", err)
+	}
+	if !found {
+		// Older CRD versions don't have the node field, default to 0
+		node = 0
 	}
 
 	return int32(total), int32(node), nil
@@ -1820,10 +1903,12 @@ func (r *VirtPlatformConfigReconciler) enqueueHCODependentConfigs() handler.Even
 				continue
 			}
 
-			// Only care about completed configs (active management)
+			// Only care about configs in active management or waiting for review
 			// Skip Pending, Drafting, Failed, etc. - they'll pick up new limits on next plan generation
+			// Include ReviewRequired to enable drift auto-resolution when HCO changes back
 			if config.Status.Phase != advisorv1alpha1.PlanPhaseCompleted &&
-				config.Status.Phase != advisorv1alpha1.PlanPhaseCompletedWithErrors {
+				config.Status.Phase != advisorv1alpha1.PlanPhaseCompletedWithErrors &&
+				config.Status.Phase != advisorv1alpha1.PlanPhaseReviewRequired {
 				continue
 			}
 
