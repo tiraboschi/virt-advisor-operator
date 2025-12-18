@@ -429,7 +429,7 @@ func (p *LoadAwareRebalancingProfile) GetImpactSummary() string {
 
 // GetImpactLevel returns the aggregate risk level
 func (p *LoadAwareRebalancingProfile) GetImpactLevel() advisorv1alpha1.Impact {
-	return advisorv1alpha1.ImpactMedium
+	return advisorv1alpha1.ImpactHigh
 }
 
 // IsAdvertisable returns true since this is a production profile
