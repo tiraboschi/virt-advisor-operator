@@ -14,10 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package loadaware
 
 import (
 	"testing"
+
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
 func TestLoadAwareProfile_GetName(t *testing.T) {
@@ -214,44 +216,14 @@ func TestLoadAwareProfile_GVKDefinitions(t *testing.T) {
 		t.Errorf("KubeDeschedulerGVK.Kind = %q, want %q", KubeDeschedulerGVK.Kind, "KubeDescheduler")
 	}
 
-	if MachineConfigGVK.Group != "machineconfiguration.openshift.io" {
-		t.Errorf("MachineConfigGVK.Group = %q, want %q", MachineConfigGVK.Group, "machineconfiguration.openshift.io")
+	if profileutils.MachineConfigGVK.Group != "machineconfiguration.openshift.io" {
+		t.Errorf("MachineConfigGVK.Group = %q, want %q", profileutils.MachineConfigGVK.Group, "machineconfiguration.openshift.io")
 	}
-	if MachineConfigGVK.Version != "v1" {
-		t.Errorf("MachineConfigGVK.Version = %q, want %q", MachineConfigGVK.Version, "v1")
+	if profileutils.MachineConfigGVK.Version != "v1" {
+		t.Errorf("MachineConfigGVK.Version = %q, want %q", profileutils.MachineConfigGVK.Version, "v1")
 	}
-	if MachineConfigGVK.Kind != "MachineConfig" {
-		t.Errorf("MachineConfigGVK.Kind = %q, want %q", MachineConfigGVK.Kind, "MachineConfig")
-	}
-}
-
-func TestLoadAwareProfile_Registration(t *testing.T) {
-	// Verify the profile is registered in the default registry
-	profile, err := DefaultRegistry.Get(ProfileNameLoadAware)
-	if err != nil {
-		t.Fatalf("DefaultRegistry.Get(%q) error = %v", ProfileNameLoadAware, err)
-	}
-
-	if profile == nil {
-		t.Fatal("DefaultRegistry.Get() returned nil profile")
-	}
-
-	if profile.GetName() != ProfileNameLoadAware {
-		t.Errorf("Registered profile name = %q, want %q", profile.GetName(), ProfileNameLoadAware)
-	}
-
-	// Verify it's listed in available profiles
-	profiles := DefaultRegistry.List()
-	found := false
-	for _, name := range profiles {
-		if name == ProfileNameLoadAware {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Errorf("Profile %q not found in registry list %v", ProfileNameLoadAware, profiles)
+	if profileutils.MachineConfigGVK.Kind != "MachineConfig" {
+		t.Errorf("MachineConfigGVK.Kind = %q, want %q", profileutils.MachineConfigGVK.Kind, "MachineConfig")
 	}
 }
 
@@ -365,4 +337,19 @@ func TestLoadAwareProfile_HCOConstants(t *testing.T) {
 	if HyperConvergedGVK.Kind != "HyperConverged" {
 		t.Errorf("HyperConvergedGVK.Kind = %q, want %q", HyperConvergedGVK.Kind, "HyperConverged")
 	}
+}
+
+// contains checks if a string contains a substring.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

@@ -21,6 +21,8 @@ import (
 	"strconv"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/higherdensity"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
 )
 
 // OptionsToMap converts typed ProfileOptions to map[string]string for profiles that still use map-based config.
@@ -31,12 +33,12 @@ func OptionsToMap(profileName string, options *advisorv1alpha1.ProfileOptions) m
 	}
 
 	switch profileName {
-	case ProfileNameLoadAware:
+	case loadaware.ProfileNameLoadAware:
 		if options.LoadAware == nil {
 			return map[string]string{}
 		}
 		return loadAwareToMap(options.LoadAware)
-	case ProfileNameVirtHigherDensity:
+	case higherdensity.ProfileNameVirtHigherDensity:
 		if options.VirtHigherDensity == nil {
 			return map[string]string{}
 		}
@@ -119,11 +121,11 @@ func ValidateOptions(profileName string, options *advisorv1alpha1.ProfileOptions
 
 	// Check that only the field matching the profile is set
 	switch profileName {
-	case ProfileNameLoadAware:
+	case loadaware.ProfileNameLoadAware:
 		// LoadAware can be nil (use defaults) or set (use custom values)
 		// No validation needed - CEL already ensures other fields aren't set
 		return nil
-	case ProfileNameVirtHigherDensity:
+	case higherdensity.ProfileNameVirtHigherDensity:
 		// VirtHigherDensity can be nil (use defaults) or set (use custom values)
 		// No validation needed - CEL already ensures other fields aren't set
 		return nil

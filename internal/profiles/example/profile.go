@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package example
 
 import (
 	"context"
@@ -123,11 +123,4 @@ func (p *ExampleProfile) GetImpactLevel() advisorv1alpha1.Impact {
 // IsAdvertisable returns false since this is an example profile
 func (p *ExampleProfile) IsAdvertisable() bool {
 	return false
-}
-
-func init() {
-	// Register this profile in the default registry
-	if err := DefaultRegistry.Register(NewExampleProfile()); err != nil {
-		panic(fmt.Sprintf("failed to register example profile: %v", err))
-	}
 }

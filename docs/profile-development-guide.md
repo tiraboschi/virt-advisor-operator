@@ -4,6 +4,33 @@
 
 This guide explains how to create new configuration profiles for the virt-advisor-operator. Profiles define reusable configuration capabilities that can be applied to the cluster with proper governance controls.
 
+## Directory Structure
+
+Profiles are organized in subdirectories under `internal/profiles/`. Each profile has its own package:
+
+```
+internal/profiles/
+├── profiles.go              # Central registry and Profile interface
+├── profileutils/            # Shared utilities
+│   ├── constants.go         # Shared GVKs and constants
+│   ├── config_helpers.go    # Configuration helper functions
+│   └── builder.go           # PlanItemBuilder
+├── loadaware/               # Load-aware rebalancing profile
+│   ├── profile.go
+│   └── profile_integration_test.go
+├── higherdensity/           # Higher-density profile
+│   ├── profile.go
+│   └── profile_integration_test.go
+└── example/                 # Example profile
+    └── profile.go
+```
+
+**Key principles:**
+- ✅ **One profile per subdirectory** - Enables CODEOWNERS protection
+- ✅ **Package name matches directory** - Clear organization (e.g., `package loadaware`)
+- ✅ **Integration tests in same directory** - Keep tests with implementation
+- ✅ **Shared code in profileutils/** - Avoid circular dependencies
+
 ## CRITICAL REQUIREMENT: Always Use PlanItemBuilder
 
 **You MUST use `PlanItemBuilder` when creating `VirtPlatformConfigItem` objects.** This ensures:
@@ -57,7 +84,7 @@ func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, over
     }
 
     // 2. Use the builder to create the item with SSA-generated diff
-    item, err := NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+    item, err := profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
         ForResource(desired, "my-item").
         WithManagedFields([]string{"spec.newValue"}).
         WithMessage("MyResource will be configured").
@@ -108,25 +135,21 @@ When you call `.Build()`, the builder:
 ## Complete Example: LoadAwareRebalancing Profile
 
 ```go
-package profiles
+package loadaware
 
 import (
     "context"
     "fmt"
 
     "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-    "k8s.io/apimachinery/pkg/runtime/schema"
     "sigs.k8s.io/controller-runtime/pkg/client"
 
     advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
     "github.com/kubevirt/virt-advisor-operator/internal/plan"
+    "github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
-var KubeDeschedulerGVK = schema.GroupVersionKind{
-    Group:   "operator.openshift.io",
-    Version: "v1",
-    Kind:    "KubeDescheduler",
-}
+const ProfileNameLoadAware = "load-aware-rebalancing"
 
 type LoadAwareRebalancingProfile struct {
     name string
@@ -134,7 +157,7 @@ type LoadAwareRebalancingProfile struct {
 
 func NewLoadAwareRebalancingProfile() *LoadAwareRebalancingProfile {
     return &LoadAwareRebalancingProfile{
-        name: "load-aware-rebalancing",
+        name: ProfileNameLoadAware,
     }
 }
 
@@ -154,8 +177,8 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
     // Build list of profiles, preserving AffinityAndTaints and SoftTopologyAndDuplicates
     profiles := p.buildProfilesList(ctx, c, profile)
 
-    // Build desired configuration
-    desired := plan.CreateUnstructured(KubeDeschedulerGVK, "cluster", "openshift-kube-descheduler-operator")
+    // Build desired configuration using shared GVK from profileutils
+    desired := plan.CreateUnstructured(profileutils.KubeDeschedulerGVK, "cluster", "openshift-kube-descheduler-operator")
 
     spec := map[string]interface{}{
         "deschedulingIntervalSeconds": int64(1800),
@@ -187,7 +210,7 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
     }
 
     // Use builder to create item with SSA-generated diff
-    item, err := NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+    item, err := profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
         ForResource(desired, "enable-load-aware-descheduling").
         WithManagedFields(managedFields).
         WithMessage(fmt.Sprintf("KubeDescheduler 'cluster' will be configured with profile '%s'", profile)).
@@ -200,11 +223,209 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
     return []advisorv1alpha1.VirtPlatformConfigItem{item}, nil
 }
 
-func init() {
-    if err := DefaultRegistry.Register(NewLoadAwareRebalancingProfile()); err != nil {
-        panic(fmt.Sprintf("failed to register profile: %v", err))
+// Note: Profile registration is handled by the parent profiles package in its init() function
+// Parent directly instantiates: loadaware.NewLoadAwareRebalancingProfile()
+```
+
+## Creating a New Profile
+
+Follow these steps to create a new profile:
+
+### 1. Create a New Subdirectory
+
+Create a new subdirectory under `internal/profiles/` with your profile name (e.g., `myprofile/`):
+
+```bash
+mkdir internal/profiles/myprofile
+```
+
+### 2. Create the Profile Implementation
+
+Create `profile.go` in your subdirectory:
+
+```go
+package myprofile
+
+import (
+    "context"
+    "fmt"
+
+    "sigs.k8s.io/controller-runtime/pkg/client"
+
+    advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+    "github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
+)
+
+const ProfileNameMyProfile = "my-profile"
+
+type MyProfile struct {
+    name string
+}
+
+func NewMyProfile() *MyProfile {
+    return &MyProfile{
+        name: ProfileNameMyProfile,
     }
 }
+
+func (p *MyProfile) GetName() string {
+    return p.name
+}
+
+func (p *MyProfile) GetPrerequisites() []discovery.Prerequisite {
+    // Return list of required CRDs
+    return []discovery.Prerequisite{
+        {
+            GVK:         profileutils.SomeRequiredGVK,
+            Description: "Please install the required operator via OLM",
+        },
+    }
+}
+
+func (p *MyProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
+    // Return list of resource types this profile manages
+    return []schema.GroupVersionKind{
+        profileutils.SomeRequiredGVK,
+    }
+}
+
+func (p *MyProfile) Validate(configOverrides map[string]string) error {
+    // Validate configuration overrides
+    return nil
+}
+
+func (p *MyProfile) GeneratePlanItems(ctx context.Context, c client.Client, configOverrides map[string]string) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
+    // Build your desired configuration
+    desired := plan.CreateUnstructured(profileutils.SomeGVK, "resource-name", "namespace")
+
+    // ... configure spec ...
+
+    // Use builder to create plan item
+    item, err := profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+        ForResource(desired, "my-config-item").
+        WithManagedFields([]string{"spec.myField"}).
+        WithMessage("My resource will be configured").
+        Build()
+
+    if err != nil {
+        return nil, err
+    }
+
+    return []advisorv1alpha1.VirtPlatformConfigItem{item}, nil
+}
+```
+
+### 3. Register in Parent Package
+
+Add your profile to the parent package's `init()` function in `internal/profiles/profiles.go`:
+
+```go
+import (
+    "github.com/kubevirt/virt-advisor-operator/internal/profiles/myprofile"
+)
+
+func init() {
+    // ... existing profiles ...
+
+    if err := DefaultRegistry.Register(myprofile.NewMyProfile()); err != nil {
+        panic(fmt.Sprintf("failed to register my-profile: %v", err))
+    }
+}
+```
+
+### 4. Add Shared Constants (if needed)
+
+If your profile needs to share GVKs or other constants with other profiles, add them to `internal/profiles/profileutils/constants.go`:
+
+```go
+var (
+    MyNewGVK = schema.GroupVersionKind{
+        Group:   "example.io",
+        Version: "v1",
+        Kind:    "MyResource",
+    }
+)
+```
+
+### 5. Create Integration Tests
+
+Create `profile_integration_test.go` in your profile subdirectory:
+
+```go
+package myprofile
+
+import (
+    "context"
+    "path/filepath"
+    "testing"
+
+    . "github.com/onsi/ginkgo/v2"
+    . "github.com/onsi/gomega"
+    "sigs.k8s.io/controller-runtime/pkg/client"
+    "sigs.k8s.io/controller-runtime/pkg/envtest"
+)
+
+var (
+    integrationTestEnv    *envtest.Environment
+    integrationK8sClient  client.Client
+    integrationCtx        context.Context
+    integrationCancelFunc context.CancelFunc
+)
+
+var _ = BeforeSuite(func() {
+    integrationCtx, integrationCancelFunc = context.WithCancel(context.Background())
+
+    integrationTestEnv = &envtest.Environment{
+        CRDDirectoryPaths: []string{
+            filepath.Join("..", "..", "..", "config", "crd", "bases"),
+            // Add mock CRDs if needed
+        },
+    }
+
+    cfg, err := integrationTestEnv.Start()
+    Expect(err).NotTo(HaveOccurred())
+
+    integrationK8sClient, err = client.New(cfg, client.Options{})
+    Expect(err).NotTo(HaveOccurred())
+})
+
+var _ = AfterSuite(func() {
+    integrationCancelFunc()
+    if integrationTestEnv != nil {
+        Expect(integrationTestEnv.Stop()).To(Succeed())
+    }
+})
+
+func TestMyProfileIntegration(t *testing.T) {
+    RegisterFailHandler(Fail)
+    RunSpecs(t, "MyProfile Integration Suite")
+}
+
+var _ = Describe("MyProfile Integration", func() {
+    It("should generate plan items", func() {
+        profile := NewMyProfile()
+        items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, nil)
+        Expect(err).NotTo(HaveOccurred())
+        Expect(items).NotTo(BeEmpty())
+    })
+})
+```
+
+### 6. Add to CRD Validation
+
+Update `api/v1alpha1/virtplatformconfig_types.go` to add your profile name to the enum:
+
+```go
+// +kubebuilder:validation:Enum=load-aware-rebalancing;virt-higher-density;my-profile
+Profile string `json:"profile"`
+```
+
+### 7. CODEOWNERS Protection
+
+Once your profile is in a subdirectory, you can add it to `.github/CODEOWNERS`:
+
+```
+/internal/profiles/myprofile/ @your-team
 ```
 
 ## Profile Interface Methods
@@ -304,35 +525,106 @@ Generates the ordered list of configuration items to apply. **MUST use PlanItemB
 
 ## Testing Your Profile
 
-### Unit Tests
+### Integration Tests in Profile Subdirectory
+
+Each profile should have integration tests in its own subdirectory using a dedicated test environment:
 
 ```go
-func TestMyProfile(t *testing.T) {
-    // Set up envtest with real API server
-    testEnv := &envtest.Environment{
-        CRDDirectoryPaths: []string{"path/to/crds"},
+package myprofile
+
+import (
+    "context"
+    "path/filepath"
+    "testing"
+
+    . "github.com/onsi/ginkgo/v2"
+    . "github.com/onsi/gomega"
+    "sigs.k8s.io/controller-runtime/pkg/client"
+    "sigs.k8s.io/controller-runtime/pkg/envtest"
+
+    advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+)
+
+var (
+    integrationTestEnv    *envtest.Environment
+    integrationK8sClient  client.Client
+    integrationCtx        context.Context
+    integrationCancelFunc context.CancelFunc
+)
+
+var _ = BeforeSuite(func() {
+    integrationCtx, integrationCancelFunc = context.WithCancel(context.Background())
+
+    // Note: CRD paths use "../../../" due to subdirectory structure
+    integrationTestEnv = &envtest.Environment{
+        CRDDirectoryPaths: []string{
+            filepath.Join("..", "..", "..", "config", "crd", "bases"),
+        },
     }
 
-    cfg, err := testEnv.Start()
-    require.NoError(t, err)
-    defer testEnv.Stop()
+    cfg, err := integrationTestEnv.Start()
+    Expect(err).NotTo(HaveOccurred())
 
-    c, err := client.New(cfg, client.Options{})
-    require.NoError(t, err)
+    integrationK8sClient, err = client.New(cfg, client.Options{})
+    Expect(err).NotTo(HaveOccurred())
+})
 
-    // Create profile
-    profile := NewMyProfile()
+var _ = AfterSuite(func() {
+    integrationCancelFunc()
+    if integrationTestEnv != nil {
+        Expect(integrationTestEnv.Stop()).To(Succeed())
+    }
+})
 
-    // Generate plan items
-    items, err := profile.GeneratePlanItems(context.Background(), c, nil)
-    require.NoError(t, err)
-
-    // Verify SSA diff was generated (not manual string)
-    require.NotEmpty(t, items[0].Diff)
-    require.Contains(t, items[0].Diff, "---")  // Unified diff format
-    require.Contains(t, items[0].Diff, "+++")
+func TestMyProfileIntegration(t *testing.T) {
+    RegisterFailHandler(Fail)
+    RunSpecs(t, "MyProfile Integration Suite")
 }
+
+var _ = Describe("MyProfile Integration", func() {
+    It("should generate valid plan items with SSA diffs", func() {
+        profile := NewMyProfile()
+
+        items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, nil)
+        Expect(err).NotTo(HaveOccurred())
+        Expect(items).NotTo(BeEmpty())
+
+        // Verify SSA diff was generated (not manual string)
+        Expect(items[0].Diff).NotTo(BeEmpty())
+        Expect(items[0].Diff).To(ContainSubstring("---"))  // Unified diff format
+        Expect(items[0].Diff).To(ContainSubstring("+++"))
+
+        // Verify TargetRef is set
+        Expect(items[0].TargetRef.Name).NotTo(BeEmpty())
+        Expect(items[0].TargetRef.APIVersion).NotTo(BeEmpty())
+        Expect(items[0].TargetRef.Kind).NotTo(BeEmpty())
+    })
+
+    It("should validate configuration overrides", func() {
+        profile := NewMyProfile()
+
+        // Test valid configuration
+        err := profile.Validate(map[string]string{
+            "someOption": "validValue",
+        })
+        Expect(err).NotTo(HaveOccurred())
+
+        // Test invalid configuration
+        err = profile.Validate(map[string]string{
+            "invalidOption": "value",
+        })
+        Expect(err).To(HaveOccurred())
+    })
+})
 ```
+
+### Key Testing Principles
+
+1. **Use envtest**: Provides a real API server with validation, defaulting, and webhooks
+2. **Test SSA behavior**: Verify that diffs are generated through Server-Side Apply
+3. **Test configuration validation**: Ensure invalid options are rejected
+4. **Test prerequisites**: Verify that missing CRDs are properly detected
+5. **Path adjustments**: Remember to use `"../../../"` for CRD paths due to subdirectory nesting
 
 ## Benefits of PlanItemBuilder
 
@@ -382,17 +674,42 @@ item := advisorv1alpha1.VirtPlatformConfigItem{
 
 ```go
 // CORRECT - Enforces SSA usage
-item, err := NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+item, err := profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
     ForResource(desired, "my-item").
     Build()
 ```
 
 ## Summary
 
-1. **ALWAYS use `PlanItemBuilder`** to create VirtPlatformConfigItems
+### Directory Structure Best Practices
+
+1. **One profile per subdirectory** under `internal/profiles/` - Enables CODEOWNERS protection
+2. **Package name matches directory name** - Clear organization (e.g., `package loadaware`)
+3. **Integration tests in profile subdirectory** - Keep tests with implementation
+4. **Use profileutils/ for shared code** - Avoid circular dependencies
+5. **Register in parent's init()** - Central registration in `internal/profiles/profiles.go`
+
+### PlanItemBuilder Requirements
+
+1. **ALWAYS use `profileutils.NewPlanItemBuilder()`** to create VirtPlatformConfigItems
 2. **NEVER manually construct diffs** with string concatenation
 3. **Let the builder handle SSA dry-run** for accurate, validated diffs
 4. **Specify managed fields** for proper drift detection
 5. **Test with envtest** to verify SSA behavior
 
-Following these guidelines ensures your profile generates accurate, API-server-validated diffs that leverage CEL rules, defaulting, and webhooks as required by the VEP.
+### Profile Implementation Checklist
+
+- [ ] Create subdirectory under `internal/profiles/`
+- [ ] Implement Profile interface in `profile.go`
+- [ ] Use `profileutils.NewPlanItemBuilder()` for plan items
+- [ ] Add shared GVKs/constants to `profileutils/constants.go`
+- [ ] Create integration tests in same subdirectory with `"../../../"` paths
+- [ ] Register profile in parent's `init()` function
+- [ ] Add profile name to CRD enum validation
+- [ ] Add CODEOWNERS entry for your profile subdirectory
+
+Following these guidelines ensures your profile:
+- Generates accurate, API-server-validated diffs leveraging CEL rules, defaulting, and webhooks
+- Integrates cleanly with the profiles package architecture
+- Can be protected with team-specific CODEOWNERS files
+- Maintains proper separation of concerns without circular dependencies

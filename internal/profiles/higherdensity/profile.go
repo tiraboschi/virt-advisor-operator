@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package higherdensity
 
 import (
 	"context"
@@ -27,6 +27,7 @@ import (
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
 const (
@@ -80,7 +81,7 @@ func (p *VirtHigherDensityProfile) IsAdvertisable() bool {
 func (p *VirtHigherDensityProfile) GetPrerequisites() []discovery.Prerequisite {
 	return []discovery.Prerequisite{
 		{
-			GVK:         MachineConfigGVK,
+			GVK:         profileutils.MachineConfigGVK,
 			Description: "MachineConfig CRD is required for swap configuration (available on OpenShift)",
 		},
 	}
@@ -89,7 +90,7 @@ func (p *VirtHigherDensityProfile) GetPrerequisites() []discovery.Prerequisite {
 // GetManagedResourceTypes returns the GVKs that this profile manages
 func (p *VirtHigherDensityProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
 	return []schema.GroupVersionKind{
-		MachineConfigGVK,
+		profileutils.MachineConfigGVK,
 	}
 }
 
@@ -105,7 +106,7 @@ func (p *VirtHigherDensityProfile) GeneratePlanItems(ctx context.Context, c clie
 	var items []advisorv1alpha1.VirtPlatformConfigItem
 
 	// Get swap setting from config (default: true)
-	swapEnabled := GetBoolConfig(configOverrides, "enableSwap", true)
+	swapEnabled := profileutils.GetBoolConfig(configOverrides, "enableSwap", true)
 
 	if swapEnabled {
 		item, err := p.generateSwapMachineConfigItem(ctx, c)
@@ -123,7 +124,7 @@ func (p *VirtHigherDensityProfile) generateSwapMachineConfigItem(ctx context.Con
 	mcName := "90-worker-kubelet-swap"
 
 	// Build the desired MachineConfig object
-	desired := plan.CreateUnstructured(MachineConfigGVK, mcName, "")
+	desired := plan.CreateUnstructured(profileutils.MachineConfigGVK, mcName, "")
 
 	// Set labels
 	desired.SetLabels(map[string]string{
@@ -178,17 +179,10 @@ func (p *VirtHigherDensityProfile) generateSwapMachineConfigItem(ctx context.Con
 	}
 
 	// Use the builder to create the item with SSA-generated diff
-	return NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+	return profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
 		ForResource(desired, "enable-kubelet-swap").
 		WithManagedFields([]string{"spec.config"}).
 		WithImpact(advisorv1alpha1.ImpactHigh).
 		WithMessage(fmt.Sprintf("MachineConfig '%s' will be configured to enable kubelet swap", mcName)).
 		Build()
-}
-
-func init() {
-	// Register the profile so it's available
-	if err := DefaultRegistry.Register(NewVirtHigherDensityProfile()); err != nil {
-		panic(fmt.Sprintf("failed to register virt-higher-density profile: %v", err))
-	}
 }

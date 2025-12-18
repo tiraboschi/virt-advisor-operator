@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package loadaware
 
 import (
 	"context"
@@ -29,6 +29,7 @@ import (
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
 const (
@@ -85,13 +86,6 @@ var (
 		Kind:    "KubeDescheduler",
 	}
 
-	// MachineConfigGVK is the GroupVersionKind for MachineConfig
-	MachineConfigGVK = schema.GroupVersionKind{
-		Group:   "machineconfiguration.openshift.io",
-		Version: "v1",
-		Kind:    "MachineConfig",
-	}
-
 	// HyperConvergedGVK is the GroupVersionKind for HyperConverged
 	HyperConvergedGVK = schema.GroupVersionKind{
 		Group:   "hco.kubevirt.io",
@@ -132,7 +126,7 @@ func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisit
 			Description: "Please install the Descheduler Operator via OLM",
 		},
 		{
-			GVK:         MachineConfigGVK,
+			GVK:         profileutils.MachineConfigGVK,
 			Description: "MachineConfig CRD is required for PSI metrics configuration (typically available on OpenShift)",
 		},
 		{
@@ -146,7 +140,7 @@ func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisit
 func (p *LoadAwareRebalancingProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
 	return []schema.GroupVersionKind{
 		KubeDeschedulerGVK,
-		MachineConfigGVK,
+		profileutils.MachineConfigGVK,
 	}
 }
 
@@ -568,7 +562,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	}
 
 	// Use the builder to create the item with SSA-generated diff
-	return NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+	return profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
 		ForResource(desired, "enable-load-aware-descheduling").
 		WithManagedFields(managedFields).
 		WithMessage(fmt.Sprintf("KubeDescheduler 'cluster' will be configured with profile '%s'", profile)).
@@ -580,7 +574,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 	mcName := "99-worker-psi-karg"
 
 	// Build the desired MachineConfig object
-	desired := plan.CreateUnstructured(MachineConfigGVK, mcName, "")
+	desired := plan.CreateUnstructured(profileutils.MachineConfigGVK, mcName, "")
 
 	// Set labels
 	desired.SetLabels(map[string]string{
@@ -603,7 +597,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 	message := fmt.Sprintf("MachineConfig '%s' will be configured to enable PSI metrics", mcName)
 
 	// EFFECT-BASED VALIDATION: Check if PSI is already effective in the pool
-	isPresent, _, err := ValidateKernelArgInPool(ctx, c, poolName, psiKernelArg)
+	isPresent, _, err := profileutils.ValidateKernelArgInPool(ctx, c, poolName, psiKernelArg)
 	if err != nil {
 		// Pool might not exist in test environments - log but continue
 		log.FromContext(ctx).V(1).Info("Could not validate kernel arg in pool", "pool", poolName, "error", err)
@@ -614,7 +608,7 @@ func (p *LoadAwareRebalancingProfile) generateMachineConfigItem(ctx context.Cont
 	}
 
 	// Use the builder to create the item with SSA-generated diff
-	return NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+	return profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
 		ForResource(desired, "enable-psi-metrics").
 		WithManagedFields([]string{"spec.kernelArguments"}).
 		WithImpact(impact).
@@ -687,11 +681,4 @@ func (p *LoadAwareRebalancingProfile) GetImpactLevel() advisorv1alpha1.Impact {
 // IsAdvertisable returns true since this is a production profile
 func (p *LoadAwareRebalancingProfile) IsAdvertisable() bool {
 	return true
-}
-
-func init() {
-	// Register this profile in the default registry
-	if err := DefaultRegistry.Register(NewLoadAwareRebalancingProfile()); err != nil {
-		panic(fmt.Sprintf("failed to register load-aware rebalancing profile: %v", err))
-	}
 }

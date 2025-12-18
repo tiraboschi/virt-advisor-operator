@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
 )
 
 // TestOptionsToMap tests the OptionsToMap conversion function
@@ -32,13 +33,13 @@ func TestOptionsToMap(t *testing.T) {
 	}{
 		{
 			name:        "Nil options",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options:     nil,
 			expected:    map[string]string{},
 		},
 		{
 			name:        "Empty LoadAware options",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: nil,
 			},
@@ -46,7 +47,7 @@ func TestOptionsToMap(t *testing.T) {
 		},
 		{
 			name:        "LoadAware with all fields set",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: &advisorv1alpha1.LoadAwareConfig{
 					DeschedulingIntervalSeconds: int32Ptr(120),
@@ -62,7 +63,7 @@ func TestOptionsToMap(t *testing.T) {
 		},
 		{
 			name:        "LoadAware with partial fields (interval only)",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: &advisorv1alpha1.LoadAwareConfig{
 					DeschedulingIntervalSeconds: int32Ptr(60),
@@ -74,7 +75,7 @@ func TestOptionsToMap(t *testing.T) {
 		},
 		{
 			name:        "LoadAware with PSI disabled",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: &advisorv1alpha1.LoadAwareConfig{
 					EnablePSIMetrics: boolPtr(false),
@@ -86,7 +87,7 @@ func TestOptionsToMap(t *testing.T) {
 		},
 		{
 			name:        "LoadAware with zero interval value",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: &advisorv1alpha1.LoadAwareConfig{
 					DeschedulingIntervalSeconds: int32Ptr(0),
@@ -358,13 +359,13 @@ func TestValidateOptions(t *testing.T) {
 	}{
 		{
 			name:        "Nil options (valid)",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options:     nil,
 			expectError: false,
 		},
 		{
 			name:        "LoadAware profile with LoadAware options",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: &advisorv1alpha1.LoadAwareConfig{
 					DeschedulingIntervalSeconds: int32Ptr(120),
@@ -374,7 +375,7 @@ func TestValidateOptions(t *testing.T) {
 		},
 		{
 			name:        "LoadAware profile with nil LoadAware (valid, use defaults)",
-			profileName: ProfileNameLoadAware,
+			profileName: loadaware.ProfileNameLoadAware,
 			options: &advisorv1alpha1.ProfileOptions{
 				LoadAware: nil,
 			},

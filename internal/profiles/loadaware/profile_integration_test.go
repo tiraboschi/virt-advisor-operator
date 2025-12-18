@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package loadaware
 
 import (
 	"context"
@@ -59,7 +59,7 @@ var _ = BeforeSuite(func() {
 	By("bootstrapping integration test environment")
 	integrationTestEnv = &envtest.Environment{
 		CRDDirectoryPaths: []string{
-			filepath.Join("..", "..", "config", "crd", "bases"),
+			filepath.Join("..", "..", "..", "config", "crd", "bases"),
 		},
 		ErrorIfCRDPathMissing: false,
 	}
@@ -128,7 +128,7 @@ var _ = AfterSuite(func() {
 // Helper function to load KubeDescheduler CRD from file
 func loadKubeDeschedulerCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 	// Load the actual KubeDescheduler CRD from the mocks directory
-	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "descheduler_crd_v532.yaml")
+	crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", "descheduler_crd_v532.yaml")
 	crdBytes, err := os.ReadFile(crdPath)
 	Expect(err).NotTo(HaveOccurred(), "Failed to read KubeDescheduler CRD file")
 
@@ -142,7 +142,7 @@ func loadKubeDeschedulerCRDFromFile() *apiextensionsv1.CustomResourceDefinition 
 // Helper function to load MachineConfig CRD from file
 func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 	// Load the actual MachineConfig CRD from the mocks directory
-	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "machineconfig_crd.yaml")
+	crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", "machineconfig_crd.yaml")
 	crdBytes, err := os.ReadFile(crdPath)
 	Expect(err).NotTo(HaveOccurred(), "Failed to read MachineConfig CRD file")
 
@@ -156,7 +156,7 @@ func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 // Helper function to load MachineConfigPool CRD from file
 func loadMachineConfigPoolCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 	// Load the actual MachineConfigPool CRD from the mocks directory
-	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "machineconfigpool_crd.yaml")
+	crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", "machineconfigpool_crd.yaml")
 	crdBytes, err := os.ReadFile(crdPath)
 	Expect(err).NotTo(HaveOccurred(), "Failed to read MachineConfigPool CRD file")
 
@@ -170,7 +170,7 @@ func loadMachineConfigPoolCRDFromFile() *apiextensionsv1.CustomResourceDefinitio
 // Helper function to load HyperConverged CRD from file
 func loadHyperConvergedCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 	// Load the actual HyperConverged CRD from the mocks directory
-	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "hyperconverged_crd.yaml")
+	crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", "hyperconverged_crd.yaml")
 	crdBytes, err := os.ReadFile(crdPath)
 	Expect(err).NotTo(HaveOccurred(), "Failed to read HyperConverged CRD file")
 
@@ -609,7 +609,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 	Describe("Profile selection across CRD versions", func() {
 		// Helper to load a specific CRD version and update it in the cluster
 		loadAndUpdateCRD := func(version string) {
-			crdPath := filepath.Join("..", "..", "config", "crd", "mocks", fmt.Sprintf("descheduler_crd_%s.yaml", version))
+			crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", fmt.Sprintf("descheduler_crd_%s.yaml", version))
 			crdBytes, err := os.ReadFile(crdPath)
 			Expect(err).NotTo(HaveOccurred(), "Failed to read CRD file for version %s", version)
 

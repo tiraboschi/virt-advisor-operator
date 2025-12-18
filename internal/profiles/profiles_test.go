@@ -25,6 +25,7 @@ import (
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/example"
 )
 
 // mockProfile is a simple mock implementation for testing.
@@ -271,7 +272,7 @@ func TestRegistry_List(t *testing.T) {
 }
 
 func TestExampleProfile_GetName(t *testing.T) {
-	profile := NewExampleProfile()
+	profile := example.NewExampleProfile()
 	if profile.GetName() != "example-profile" {
 		t.Errorf("GetName() = %q, expected %q", profile.GetName(), "example-profile")
 	}
@@ -302,7 +303,7 @@ func TestExampleProfile_Validate(t *testing.T) {
 		},
 	}
 
-	profile := NewExampleProfile()
+	profile := example.NewExampleProfile()
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,7 +326,7 @@ func TestExampleProfile_Validate(t *testing.T) {
 }
 
 func TestExampleProfile_GeneratePlanItems(t *testing.T) {
-	profile := NewExampleProfile()
+	profile := example.NewExampleProfile()
 
 	items, err := profile.GeneratePlanItems(context.TODO(), nil, nil)
 	if err != nil {

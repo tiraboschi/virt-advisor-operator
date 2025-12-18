@@ -25,6 +25,9 @@ import (
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/example"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/higherdensity"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
 )
 
 // Profile defines the interface for a configuration profile.
@@ -166,3 +169,16 @@ func (r *Registry) GetAllManagedResourceTypes() []schema.GroupVersionKind {
 // DefaultRegistry is the global profile registry.
 // Profiles should register themselves during init().
 var DefaultRegistry = NewRegistry()
+
+func init() {
+	// Register all available profiles by directly instantiating them
+	if err := DefaultRegistry.Register(loadaware.NewLoadAwareRebalancingProfile()); err != nil {
+		panic(fmt.Sprintf("failed to register load-aware profile: %v", err))
+	}
+	if err := DefaultRegistry.Register(higherdensity.NewVirtHigherDensityProfile()); err != nil {
+		panic(fmt.Sprintf("failed to register virt-higher-density profile: %v", err))
+	}
+	if err := DefaultRegistry.Register(example.NewExampleProfile()); err != nil {
+		panic(fmt.Sprintf("failed to register example profile: %v", err))
+	}
+}

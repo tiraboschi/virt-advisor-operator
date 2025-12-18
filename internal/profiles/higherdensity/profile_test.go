@@ -14,10 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package higherdensity
 
 import (
 	"testing"
+
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
 func TestVirtHigherDensityProfile_GetName(t *testing.T) {
@@ -92,7 +94,7 @@ func TestVirtHigherDensityProfile_GetPrerequisites(t *testing.T) {
 
 	foundMachineConfig := false
 	for _, prereq := range prereqs {
-		if prereq.GVK == MachineConfigGVK {
+		if prereq.GVK == profileutils.MachineConfigGVK {
 			foundMachineConfig = true
 			if !contains(prereq.Description, "MachineConfig") {
 				t.Errorf("MachineConfig prerequisite description = %q, should mention MachineConfig", prereq.Description)
@@ -120,7 +122,7 @@ func TestVirtHigherDensityProfile_GetManagedResourceTypes(t *testing.T) {
 
 	foundMachineConfig := false
 	for _, gvk := range managedTypes {
-		if gvk == MachineConfigGVK {
+		if gvk == profileutils.MachineConfigGVK {
 			foundMachineConfig = true
 		}
 	}
@@ -184,32 +186,17 @@ func TestVirtHigherDensityProfile_Constants(t *testing.T) {
 	}
 }
 
-func TestVirtHigherDensityProfile_Registration(t *testing.T) {
-	// Verify the profile is registered in the default registry
-	profile, err := DefaultRegistry.Get(ProfileNameVirtHigherDensity)
-	if err != nil {
-		t.Fatalf("DefaultRegistry.Get(%q) error = %v", ProfileNameVirtHigherDensity, err)
-	}
+// contains checks if a string contains a substring.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
 
-	if profile == nil {
-		t.Fatal("DefaultRegistry.Get() returned nil profile")
-	}
-
-	if profile.GetName() != ProfileNameVirtHigherDensity {
-		t.Errorf("Registered profile name = %q, want %q", profile.GetName(), ProfileNameVirtHigherDensity)
-	}
-
-	// Verify it's listed in available profiles
-	profiles := DefaultRegistry.List()
-	found := false
-	for _, name := range profiles {
-		if name == ProfileNameVirtHigherDensity {
-			found = true
-			break
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
 		}
 	}
-
-	if !found {
-		t.Errorf("Profile %q not found in registry list %v", ProfileNameVirtHigherDensity, profiles)
-	}
+	return false
 }

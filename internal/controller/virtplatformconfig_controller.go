@@ -43,6 +43,7 @@ import (
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
 )
 
 const (
@@ -1467,7 +1468,7 @@ func (r *VirtPlatformConfigReconciler) hcoInputDependenciesChanged(ctx context.C
 		return false, ""
 	}
 
-	loadAwareProfile, ok := profile.(*profiles.LoadAwareRebalancingProfile)
+	loadAwareProfile, ok := profile.(*loadaware.LoadAwareRebalancingProfile)
 	if !ok {
 		return false, ""
 	}

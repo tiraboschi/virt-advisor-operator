@@ -18,6 +18,9 @@ package profiles
 
 import (
 	"testing"
+
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/example"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
 )
 
 // TestProfileMetadata verifies that all registered profiles implement metadata methods correctly
@@ -78,11 +81,11 @@ func TestProfileMetadata(t *testing.T) {
 
 // TestLoadAwareProfileMetadata specifically tests the LoadAwareProfile metadata
 func TestLoadAwareProfileMetadata(t *testing.T) {
-	profile := NewLoadAwareRebalancingProfile()
+	profile := loadaware.NewLoadAwareRebalancingProfile()
 
 	// Verify specific expected values
-	if profile.GetName() != ProfileNameLoadAware {
-		t.Errorf("Expected name %s, got %s", ProfileNameLoadAware, profile.GetName())
+	if profile.GetName() != loadaware.ProfileNameLoadAware {
+		t.Errorf("Expected name %s, got %s", loadaware.ProfileNameLoadAware, profile.GetName())
 	}
 
 	if profile.GetCategory() != "scheduling" {
@@ -106,7 +109,7 @@ func TestLoadAwareProfileMetadata(t *testing.T) {
 
 // TestExampleProfileNotAdvertisable verifies the example profile is not advertisable
 func TestExampleProfileNotAdvertisable(t *testing.T) {
-	profile := NewExampleProfile()
+	profile := example.NewExampleProfile()
 
 	if profile.IsAdvertisable() {
 		t.Error("ExampleProfile should NOT be advertisable")

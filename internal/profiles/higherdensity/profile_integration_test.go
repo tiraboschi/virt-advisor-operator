@@ -14,14 +14,83 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package profiles
+package higherdensity
 
 import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 )
+
+var (
+	integrationCfg       *rest.Config
+	integrationK8sClient client.Client
+	integrationTestEnv   *envtest.Environment
+	integrationCtx       context.Context
+	integrationCancel    context.CancelFunc
+)
+
+func TestVirtHigherDensityProfileIntegration(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "VirtHigherDensityProfile Integration Suite")
+}
+
+var _ = BeforeSuite(func() {
+	integrationCtx, integrationCancel = context.WithCancel(context.TODO())
+
+	By("bootstrapping integration test environment")
+	integrationTestEnv = &envtest.Environment{
+		CRDDirectoryPaths: []string{
+			filepath.Join("..", "..", "..", "config", "crd", "bases"),
+		},
+		ErrorIfCRDPathMissing: false,
+	}
+
+	var err error
+	integrationCfg, err = integrationTestEnv.Start()
+	Expect(err).NotTo(HaveOccurred())
+	Expect(integrationCfg).NotTo(BeNil())
+
+	scheme := runtime.NewScheme()
+	err = advisorv1alpha1.AddToScheme(scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Register apiextensions scheme for CRD operations
+	err = apiextensionsv1.AddToScheme(scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	integrationK8sClient, err = client.New(integrationCfg, client.Options{Scheme: scheme})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(integrationK8sClient).NotTo(BeNil())
+
+	By("loading MachineConfig CRD from file")
+	machineconfigCRD := loadMachineConfigCRDFromFile()
+	err = integrationK8sClient.Create(integrationCtx, machineconfigCRD)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Wait for environment to be ready
+	time.Sleep(1 * time.Second)
+})
+
+var _ = AfterSuite(func() {
+	integrationCancel()
+	By("tearing down the integration test environment")
+	err := integrationTestEnv.Stop()
+	Expect(err).NotTo(HaveOccurred())
+})
 
 var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 	var profile *VirtHigherDensityProfile
@@ -289,3 +358,17 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 		})
 	})
 })
+
+// Helper function to load MachineConfig CRD from file
+func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	// Load the actual MachineConfig CRD from the mocks directory
+	crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", "machineconfig_crd.yaml")
+	crdBytes, err := os.ReadFile(crdPath)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read MachineConfig CRD file")
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	err = yaml.Unmarshal(crdBytes, &crd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfig CRD")
+
+	return &crd
+}
