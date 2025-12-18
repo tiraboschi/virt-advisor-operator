@@ -21,12 +21,24 @@ const (
 	// Default descheduling interval for load-aware profile (1 minute)
 	defaultDeschedulingInterval = 60
 
+	// Default eviction limits when HCO CR is not available or has no values set
+	// These correspond to typical HCO defaults:
+	// - parallelMigrationsPerCluster (total across cluster) -> evictionLimits.total
+	// - parallelOutboundMigrationsPerNode (per node) -> evictionLimits.node
+	defaultEvictionLimitsTotal = 5
+	defaultEvictionLimitsNode  = 2
+
+	// HyperConverged resource details
+	hyperConvergedNamespace = "openshift-cnv"
+	hyperConvergedName      = "kubevirt-hyperconverged"
+
 	// PSI kernel argument to enable pressure stall information
 	psiKernelArg = "psi=1"
 
 	// CRD names
 	kubeDeschedulerCRD = "kubedeschedulers.operator.openshift.io"
 	machineConfigCRD   = "machineconfigs.machineconfiguration.openshift.io"
+	hyperConvergedCRD  = "hyperconvergeds.hco.kubevirt.io"
 
 	// KubeDescheduler resource details
 	kubeDeschedulerNamespace = "openshift-kube-descheduler-operator"
@@ -61,6 +73,13 @@ var (
 		Group:   "machineconfiguration.openshift.io",
 		Version: "v1",
 		Kind:    "MachineConfig",
+	}
+
+	// HyperConvergedGVK is the GroupVersionKind for HyperConverged
+	HyperConvergedGVK = schema.GroupVersionKind{
+		Group:   "hco.kubevirt.io",
+		Version: "v1beta1",
+		Kind:    "HyperConverged",
 	}
 )
 
@@ -99,6 +118,10 @@ func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisit
 			GVK:         MachineConfigGVK,
 			Description: "MachineConfig CRD is required for PSI metrics configuration (typically available on OpenShift)",
 		},
+		{
+			GVK:         HyperConvergedGVK,
+			Description: "HyperConverged CRD is required to read migration limits for eviction tuning (typically available on OpenShift with CNV)",
+		},
 	}
 }
 
@@ -116,11 +139,13 @@ func (p *LoadAwareRebalancingProfile) Validate(configOverrides map[string]string
 		"deschedulingIntervalSeconds": true,
 		"enablePSIMetrics":            true,
 		"devDeviationThresholds":      true,
+		"evictionLimitTotal":          true,
+		"evictionLimitNode":           true,
 	}
 
 	for key := range configOverrides {
 		if !supportedKeys[key] {
-			return fmt.Errorf("unsupported config override: %q (supported: deschedulingIntervalSeconds, enablePSIMetrics, devDeviationThresholds)", key)
+			return fmt.Errorf("unsupported config override: %q (supported: deschedulingIntervalSeconds, enablePSIMetrics, devDeviationThresholds, evictionLimitTotal, evictionLimitNode)", key)
 		}
 	}
 
@@ -180,6 +205,152 @@ func (p *LoadAwareRebalancingProfile) GeneratePlanItems(ctx context.Context, c c
 	}
 
 	return items, nil
+}
+
+// getHCOMigrationLimits reads the HyperConverged CR and returns migration limits.
+// Returns (total, node) where:
+// - total: parallelMigrationsPerCluster (cluster-wide limit) -> maps to evictionLimits.total
+// - node: parallelOutboundMigrationsPerNode (per-node limit) -> maps to evictionLimits.node
+// If HCO CR doesn't exist or values aren't set, returns defaults.
+// This function never returns an error - all error conditions are handled by returning defaults.
+func (p *LoadAwareRebalancingProfile) getHCOMigrationLimits(ctx context.Context, c client.Client) (int32, int32) {
+	logger := log.FromContext(ctx)
+
+	// Try to fetch the HyperConverged CR
+	hco, err := plan.GetUnstructured(ctx, c, HyperConvergedGVK, hyperConvergedName, hyperConvergedNamespace)
+	if err != nil {
+		logger.V(1).Info("Could not fetch HyperConverged CR, using defaults",
+			"name", hyperConvergedName,
+			"namespace", hyperConvergedNamespace,
+			"error", err)
+		return defaultEvictionLimitsTotal, defaultEvictionLimitsNode
+	}
+
+	// Extract migration limits from spec.liveMigrationConfig
+	// parallelMigrationsPerCluster -> total cluster-wide evictions
+	totalLimit, totalFound, err := unstructured.NestedInt64(hco.Object, "spec", "liveMigrationConfig", "parallelMigrationsPerCluster")
+	if err != nil {
+		logger.V(1).Info("Error reading parallelMigrationsPerCluster from HCO", "error", err)
+	}
+
+	// parallelOutboundMigrationsPerNode -> evictions per node
+	nodeLimit, nodeFound, err := unstructured.NestedInt64(hco.Object, "spec", "liveMigrationConfig", "parallelOutboundMigrationsPerNode")
+	if err != nil {
+		logger.V(1).Info("Error reading parallelOutboundMigrationsPerNode from HCO", "error", err)
+	}
+
+	// Use HCO values if found, otherwise use defaults
+	total := int32(defaultEvictionLimitsTotal)
+	if totalFound && totalLimit > 0 {
+		total = int32(totalLimit)
+	}
+
+	node := int32(defaultEvictionLimitsNode)
+	if nodeFound && nodeLimit > 0 {
+		node = int32(nodeLimit)
+	}
+
+	logger.V(1).Info("HCO migration limits",
+		"parallelMigrationsPerCluster (total)", total,
+		"parallelOutboundMigrationsPerNode (node)", node)
+
+	return total, node
+}
+
+// computeScaledEvictionLimit scales down eviction limits for larger values using a monotonic function.
+// For values <10: use as-is (slope = 1)
+// For values >=10: use piecewise linear scaling with 80% slope, continuous at the boundary
+//
+//	Formula: 10 + (value - 10) * 0.8
+//
+// This ensures monotonicity: output never decreases when input increases.
+//
+// Examples:
+//
+//	9 → 9
+//	10 → 10
+//	11 → 10 (10 + 0.8 = 10.8 → 10 via integer division)
+//	12 → 11 (10 + 1.6 = 11.6 → 11 via integer division)
+//	15 → 14 (10 + 4 = 14)
+//	20 → 18 (10 + 8 = 18)
+//	25 → 22 (10 + 12 = 22)
+func computeScaledEvictionLimit(hcoValue int32) int32 {
+	if hcoValue < 10 {
+		return hcoValue
+	}
+	// Piecewise linear scaling: 10 + (value - 10) * 0.8
+	// Using int32 math: 10 + ((value - 10) * 4) / 5
+	return 10 + ((hcoValue-10)*4)/5
+}
+
+// GetEvictionLimitsForTesting is exported for testing and controller access.
+// It determines eviction limits based on config overrides or HCO defaults.
+// Returns (total, node) where:
+// - total: cluster-wide eviction limit (evictionLimits.total)
+// - node: per-node eviction limit (evictionLimits.node)
+func (p *LoadAwareRebalancingProfile) GetEvictionLimitsForTesting(ctx context.Context, c client.Client, configOverrides map[string]string) (int32, int32, error) {
+	return p.getEvictionLimits(ctx, c, configOverrides)
+}
+
+// getEvictionLimits determines eviction limits based on config overrides or HCO defaults.
+// Returns (total, node) where:
+// - total: cluster-wide eviction limit (evictionLimits.total)
+// - node: per-node eviction limit (evictionLimits.node)
+func (p *LoadAwareRebalancingProfile) getEvictionLimits(ctx context.Context, c client.Client, configOverrides map[string]string) (int32, int32, error) {
+	logger := log.FromContext(ctx)
+
+	// Check if user provided explicit values in profile options
+	var totalLimit, nodeLimit int32
+	totalProvided := false
+	nodeProvided := false
+
+	if val, ok := configOverrides["evictionLimitTotal"]; ok && val != "" {
+		var parsed int32
+		if _, err := fmt.Sscanf(val, "%d", &parsed); err == nil && parsed > 0 {
+			totalLimit = parsed
+			totalProvided = true
+			logger.V(1).Info("Using user-provided total eviction limit", "value", parsed)
+		}
+	}
+
+	if val, ok := configOverrides["evictionLimitNode"]; ok && val != "" {
+		var parsed int32
+		if _, err := fmt.Sscanf(val, "%d", &parsed); err == nil && parsed > 0 {
+			nodeLimit = parsed
+			nodeProvided = true
+			logger.V(1).Info("Using user-provided node eviction limit", "value", parsed)
+		}
+	}
+
+	// If both provided by user, return them
+	if totalProvided && nodeProvided {
+		return totalLimit, nodeLimit, nil
+	}
+
+	// Read HCO migration limits (returns total, node)
+	// This function always succeeds - errors are handled by returning defaults
+	hcoTotal, hcoNode := p.getHCOMigrationLimits(ctx, c)
+
+	// Scale HCO values
+	scaledTotal := computeScaledEvictionLimit(hcoTotal)
+	scaledNode := computeScaledEvictionLimit(hcoNode)
+
+	// Use scaled HCO values for any limits not provided by user
+	if !totalProvided {
+		totalLimit = scaledTotal
+		logger.V(1).Info("Using scaled HCO value for total eviction limit",
+			"hcoValue", hcoTotal,
+			"scaledValue", scaledTotal)
+	}
+
+	if !nodeProvided {
+		nodeLimit = scaledNode
+		logger.V(1).Info("Using scaled HCO value for node eviction limit",
+			"hcoValue", hcoNode,
+			"scaledValue", scaledNode)
+	}
+
+	return totalLimit, nodeLimit, nil
 }
 
 // selectDeschedulerProfile determines the best available descheduler profile to use.
@@ -338,11 +509,25 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 			devThresholds = customThresholds
 		}
 
+		// Get eviction limits (from user config, HCO defaults, or fallback defaults)
+		// Returns (total, node) which map to evictionLimits.total and evictionLimits.node
+		totalLimit, nodeLimit, err := p.getEvictionLimits(ctx, c, configOverrides)
+		if err != nil {
+			return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to determine eviction limits: %w", err)
+		}
+
 		profileCustomizations := map[string]interface{}{
 			"devEnableEvictionsInBackground": true,
 			"devEnableSoftTainter":           true,
 			"devDeviationThresholds":         devThresholds,
 		}
+
+		// Set evictionLimits as a nested structure
+		evictionLimits := map[string]interface{}{
+			"total": int64(totalLimit),
+			"node":  int64(nodeLimit),
+		}
+		profileCustomizations["evictionLimits"] = evictionLimits
 
 		spec["profileCustomizations"] = profileCustomizations
 	}

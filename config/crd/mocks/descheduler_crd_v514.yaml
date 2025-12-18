@@ -185,6 +185,21 @@ spec:
                       ThresholdPriorityClassName when set will reject eviction of any pod with priority equal or higher
                       It is invalid to set it alongside ThresholdPriority
                     type: string
+                  evictionLimits:
+                    description: |-
+                      EvictionLimits controls the maximum number of evictions allowed during descheduling
+                    properties:
+                      total:
+                        description: |-
+                          Total is the cluster-wide maximum number of evictions per descheduling run
+                        format: int64
+                        type: integer
+                      node:
+                        description: |-
+                          Node is the per-node maximum number of evictions per descheduling run
+                        format: int64
+                        type: integer
+                    type: object
                 type: object
               profiles:
                 description: Profiles sets which descheduler strategy profiles are

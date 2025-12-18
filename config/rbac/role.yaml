@@ -47,6 +47,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - hco.kubevirt.io
+  resources:
+  - hyperconvergeds
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - machineconfiguration.openshift.io
   resources:
   - machineconfigpools

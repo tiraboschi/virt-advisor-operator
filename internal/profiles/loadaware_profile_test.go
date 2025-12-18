@@ -238,3 +238,115 @@ func TestLoadAwareProfile_Registration(t *testing.T) {
 		t.Errorf("Profile %q not found in registry list %v", ProfileNameLoadAware, profiles)
 	}
 }
+
+func TestComputeScaledEvictionLimit(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    int32
+		expected int32
+	}{
+		{
+			name:     "value less than 10 - use as is (1)",
+			input:    1,
+			expected: 1,
+		},
+		{
+			name:     "value less than 10 - use as is (5)",
+			input:    5,
+			expected: 5,
+		},
+		{
+			name:     "value less than 10 - use as is (9)",
+			input:    9,
+			expected: 9,
+		},
+		{
+			name:     "value exactly 10 - continuous at boundary",
+			input:    10,
+			expected: 10, // 10 + (10-10)*0.8 = 10
+		},
+		{
+			name:     "value 15 - monotonic scaling",
+			input:    15,
+			expected: 14, // 10 + (15-10)*0.8 = 10 + 4 = 14
+		},
+		{
+			name:     "value 20 - monotonic scaling",
+			input:    20,
+			expected: 18, // 10 + (20-10)*0.8 = 10 + 8 = 18
+		},
+		{
+			name:     "value 25 - monotonic scaling",
+			input:    25,
+			expected: 22, // 10 + (25-10)*0.8 = 10 + 12 = 22
+		},
+		{
+			name:     "value 50 - monotonic scaling",
+			input:    50,
+			expected: 42, // 10 + (50-10)*0.8 = 10 + 32 = 42
+		},
+		{
+			name:     "value 100 - monotonic scaling",
+			input:    100,
+			expected: 82, // 10 + (100-10)*0.8 = 10 + 72 = 82
+		},
+		{
+			name:     "value 11 - monotonic scaling with integer rounding",
+			input:    11,
+			expected: 10, // 10 + ((11-10)*4)/5 = 10 + 0 = 10 (integer division)
+		},
+		{
+			name:     "value 13 - monotonic scaling with integer rounding",
+			input:    13,
+			expected: 12, // 10 + ((13-10)*4)/5 = 10 + 2 = 12 (integer division)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := computeScaledEvictionLimit(tt.input)
+			if result != tt.expected {
+				t.Errorf("computeScaledEvictionLimit(%d) = %d, want %d", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestLoadAwareProfile_EvictionLimitDefaults(t *testing.T) {
+	// Verify eviction limit constants are correctly defined
+	// HCO defaults: parallelMigrationsPerCluster=5 -> evictionLimits.total
+	//               parallelOutboundMigrationsPerNode=2 -> evictionLimits.node
+	if defaultEvictionLimitsTotal != 5 {
+		t.Errorf("defaultEvictionLimitsTotal = %d, want %d", defaultEvictionLimitsTotal, 5)
+	}
+
+	if defaultEvictionLimitsNode != 2 {
+		t.Errorf("defaultEvictionLimitsNode = %d, want %d", defaultEvictionLimitsNode, 2)
+	}
+}
+
+func TestLoadAwareProfile_HCOConstants(t *testing.T) {
+	// Verify HyperConverged resource constants
+	if hyperConvergedNamespace != "openshift-cnv" {
+		t.Errorf("hyperConvergedNamespace = %q, want %q", hyperConvergedNamespace, "openshift-cnv")
+	}
+
+	if hyperConvergedName != "kubevirt-hyperconverged" {
+		t.Errorf("hyperConvergedName = %q, want %q", hyperConvergedName, "kubevirt-hyperconverged")
+	}
+
+	if hyperConvergedCRD != "hyperconvergeds.hco.kubevirt.io" {
+		t.Errorf("hyperConvergedCRD = %q, want %q", hyperConvergedCRD, "hyperconvergeds.hco.kubevirt.io")
+	}
+
+	// Verify HyperConvergedGVK
+	if HyperConvergedGVK.Group != "hco.kubevirt.io" {
+		t.Errorf("HyperConvergedGVK.Group = %q, want %q", HyperConvergedGVK.Group, "hco.kubevirt.io")
+	}
+	if HyperConvergedGVK.Version != "v1beta1" {
+		t.Errorf("HyperConvergedGVK.Version = %q, want %q", HyperConvergedGVK.Version, "v1beta1")
+	}
+	if HyperConvergedGVK.Kind != "HyperConverged" {
+		t.Errorf("HyperConvergedGVK.Kind = %q, want %q", HyperConvergedGVK.Kind, "HyperConverged")
+	}
+}
