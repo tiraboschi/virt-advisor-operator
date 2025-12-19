@@ -243,14 +243,21 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 			if profileErr == nil {
 				checker := discovery.NewCRDChecker(r.Client)
 				missing, checkErr := checker.CheckPrerequisites(ctx, profile.GetPrerequisites())
-				if checkErr == nil && len(missing) == 0 {
-					// Prerequisites are now available! Reset to Pending to regenerate plan
-					logger.Info("Prerequisites now available, retrying plan generation")
-					err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Prerequisites now available")
-					return ctrl.Result{}, err
+				if checkErr == nil {
+					if len(missing) == 0 {
+						// Prerequisites are now available! Reset to Pending to regenerate plan
+						logger.Info("Prerequisites now available, retrying plan generation")
+						err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending, "Prerequisites now available")
+						return ctrl.Result{}, err
+					}
+					// Some prerequisites still missing - update condition message to reflect current state
+					logger.Info("Prerequisites still not met, updating condition message", "missing", len(missing))
+					err = r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePrerequisiteFailed,
+						discovery.FormatMissingPrerequisites(missing))
+					return ctrl.Result{RequeueAfter: 2 * time.Minute}, err
 				}
 			}
-			// Prerequisites still missing, check periodically
+			// Error checking prerequisites or profile not found, keep existing message
 			logger.Info("Prerequisites not met, will retry periodically")
 			return ctrl.Result{RequeueAfter: 2 * time.Minute}, nil
 		}
