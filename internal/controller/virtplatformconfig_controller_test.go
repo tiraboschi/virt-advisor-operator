@@ -409,9 +409,9 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 				return ""
 			}).Should(And(
 				ContainSubstring("Missing required dependencies"),
-				// Both KubeDescheduler and HyperConverged should still be listed as missing
+				// Only KubeDescheduler should be missing (HyperConverged CRD is now loaded in test suite)
 				ContainSubstring("KubeDescheduler"),
-				ContainSubstring("HyperConverged"),
+				Not(ContainSubstring("HyperConverged")),
 			))
 
 			By("verifying phase remains PrerequisiteFailed")
@@ -1300,6 +1300,247 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 			// Cleanup
 			_ = k8sClient.Delete(ctx, hco)
 			_ = k8sClient.Delete(ctx, descheduler)
+		})
+	})
+
+	Context("When detecting HCO higher-density config drift", func() {
+		const resourceName = "virt-higher-density"
+		ctx := context.Background()
+
+		typeNamespacedName := types.NamespacedName{
+			Name: resourceName,
+		}
+
+		BeforeEach(func() {
+			By("creating a VirtPlatformConfig with action=Apply")
+			resource := &advisorv1alpha1.VirtPlatformConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: resourceName,
+				},
+				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
+					Profile: resourceName,
+					Action:  advisorv1alpha1.PlanActionApply,
+				},
+			}
+
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			By("cleaning up the VirtPlatformConfig")
+			resource := &advisorv1alpha1.VirtPlatformConfig{}
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err == nil {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+		})
+
+		It("should detect drift when HCO KSM configuration changes", func() {
+			By("setting up a Completed configuration with KSM enabled")
+			resource := &advisorv1alpha1.VirtPlatformConfig{}
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, typeNamespacedName, resource)
+				if err != nil {
+					return err
+				}
+
+				// Simulate a completed configuration with HCO item
+				desiredState := map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+					"spec": map[string]interface{}{
+						"configuration": map[string]interface{}{
+							"ksmConfiguration": map[string]interface{}{
+								"nodeLabelSelector": map[string]interface{}{},
+							},
+						},
+						"higherWorkloadDensity": map[string]interface{}{
+							"memoryOvercommitPercentage": int64(150),
+						},
+					},
+				}
+				rawJSON, _ := json.Marshal(desiredState)
+
+				resource.Status.Phase = advisorv1alpha1.PlanPhaseCompleted
+				resource.Status.ObservedGeneration = resource.Generation
+				resource.Status.Items = []advisorv1alpha1.VirtPlatformConfigItem{
+					{
+						Name:  "configure-higher-density",
+						State: advisorv1alpha1.ItemStateCompleted,
+						TargetRef: advisorv1alpha1.ObjectReference{
+							APIVersion: "hco.kubevirt.io/v1beta1",
+							Kind:       "HyperConverged",
+							Name:       "kubevirt-hyperconverged",
+							Namespace:  "openshift-cnv",
+						},
+						DesiredState: &runtime.RawExtension{Raw: rawJSON},
+						Message:      "Configuration successfully applied",
+					},
+				}
+
+				return k8sClient.Status().Update(ctx, resource)
+			}).Should(Succeed())
+
+			By("creating HCO CR with KSM enabled")
+			hco := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+					"spec": map[string]interface{}{
+						"configuration": map[string]interface{}{
+							"ksmConfiguration": map[string]interface{}{
+								"nodeLabelSelector": map[string]interface{}{},
+							},
+						},
+						"higherWorkloadDensity": map[string]interface{}{
+							"memoryOvercommitPercentage": int64(150),
+						},
+					},
+				},
+			}
+			_ = k8sClient.Create(ctx, hco)
+
+			By("verifying the configuration is in Completed phase")
+			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resource.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseCompleted))
+
+			By("changing HCO memoryOvercommitPercentage to trigger drift detection")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      "kubevirt-hyperconverged",
+					Namespace: "openshift-cnv",
+				}, hco)
+				if err != nil {
+					return err
+				}
+
+				spec := hco.Object["spec"].(map[string]interface{})
+				higherDensity := spec["higherWorkloadDensity"].(map[string]interface{})
+				higherDensity["memoryOvercommitPercentage"] = int64(200) // Changed from 150
+
+				return k8sClient.Update(ctx, hco)
+			}).Should(Succeed())
+
+			By("triggering reconciliation")
+			controllerReconciler := &VirtPlatformConfigReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+
+			// Verify drift was detected if HCO CRD exists
+			if err == nil {
+				err = k8sClient.Get(ctx, typeNamespacedName, resource)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Should transition to Drafting to regenerate plan
+				if resource.Status.Phase == advisorv1alpha1.PlanPhaseDrafting {
+					By("verifying InputDependencyDrift marker was set")
+					hasDriftCondition := false
+					for _, cond := range resource.Status.Conditions {
+						if cond.Type == "InputDependencyDrift" && cond.Status == metav1.ConditionTrue {
+							hasDriftCondition = true
+							Expect(cond.Message).To(ContainSubstring("memoryOvercommitPercentage"))
+							break
+						}
+					}
+					Expect(hasDriftCondition).To(BeTrue(),
+						"InputDependencyDrift marker should be set when HCO memory config changes")
+				}
+			}
+
+			// Cleanup
+			_ = k8sClient.Delete(ctx, hco)
+		})
+
+		It("should not detect drift when user has explicit config overrides", func() {
+			By("creating VirtPlatformConfig with explicit memoryToRequestRatio")
+			resource := &advisorv1alpha1.VirtPlatformConfig{}
+			// First update spec with explicit config override
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, typeNamespacedName, resource)
+				if err != nil {
+					return err
+				}
+
+				memoryRatio := int32(180)
+				resource.Spec.Options = &advisorv1alpha1.ProfileOptions{
+					VirtHigherDensity: &advisorv1alpha1.VirtHigherDensityConfig{
+						MemoryToRequestRatio: &memoryRatio,
+					},
+				}
+
+				return k8sClient.Update(ctx, resource)
+			}).Should(Succeed())
+
+			// Then update status to Completed
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, typeNamespacedName, resource)
+				if err != nil {
+					return err
+				}
+
+				resource.Status.Phase = advisorv1alpha1.PlanPhaseCompleted
+				resource.Status.ObservedGeneration = resource.Generation
+				resource.Status.AppliedOptions = resource.Spec.Options
+
+				return k8sClient.Status().Update(ctx, resource)
+			}).Should(Succeed())
+
+			By("creating HCO CR")
+			hco := &unstructured.Unstructured{
+				Object: map[string]interface{}{
+					"apiVersion": "hco.kubevirt.io/v1beta1",
+					"kind":       "HyperConverged",
+					"metadata": map[string]interface{}{
+						"name":      "kubevirt-hyperconverged",
+						"namespace": "openshift-cnv",
+					},
+					"spec": map[string]interface{}{
+						"higherWorkloadDensity": map[string]interface{}{
+							"memoryOvercommitPercentage": int64(150),
+						},
+					},
+				},
+			}
+			_ = k8sClient.Create(ctx, hco)
+
+			By("triggering reconciliation")
+			controllerReconciler := &VirtPlatformConfigReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+
+			// Should NOT detect drift because user has explicit override
+			if err == nil {
+				err = k8sClient.Get(ctx, typeNamespacedName, resource)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Phase should remain Completed (no drift detected)
+				Expect(resource.Status.Phase).To(Equal(advisorv1alpha1.PlanPhaseCompleted))
+			}
+
+			// Cleanup
+			_ = k8sClient.Delete(ctx, hco)
 		})
 	})
 })

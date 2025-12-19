@@ -46,10 +46,6 @@ const (
 	defaultEvictionLimitsTotal = 5
 	defaultEvictionLimitsNode  = 2
 
-	// HyperConverged resource details
-	hyperConvergedNamespace = "openshift-cnv"
-	hyperConvergedName      = "kubevirt-hyperconverged"
-
 	// PSI kernel argument to enable pressure stall information
 	psiKernelArg = "psi=1"
 
@@ -84,13 +80,6 @@ var (
 		Group:   "operator.openshift.io",
 		Version: "v1",
 		Kind:    "KubeDescheduler",
-	}
-
-	// HyperConvergedGVK is the GroupVersionKind for HyperConverged
-	HyperConvergedGVK = schema.GroupVersionKind{
-		Group:   "hco.kubevirt.io",
-		Version: "v1beta1",
-		Kind:    "HyperConverged",
 	}
 )
 
@@ -130,7 +119,7 @@ func (p *LoadAwareRebalancingProfile) GetPrerequisites() []discovery.Prerequisit
 			Description: "MachineConfig CRD is required for PSI metrics configuration (typically available on OpenShift)",
 		},
 		{
-			GVK:         HyperConvergedGVK,
+			GVK:         profileutils.HyperConvergedGVK,
 			Description: "Please install OpenShift Virtualization via OLM",
 		},
 	}
@@ -228,11 +217,11 @@ func (p *LoadAwareRebalancingProfile) getHCOMigrationLimits(ctx context.Context,
 	logger := log.FromContext(ctx)
 
 	// Try to fetch the HyperConverged CR
-	hco, err := plan.GetUnstructured(ctx, c, HyperConvergedGVK, hyperConvergedName, hyperConvergedNamespace)
+	hco, err := profileutils.GetHCO(ctx, c)
 	if err != nil {
 		logger.V(1).Info("Could not fetch HyperConverged CR, using defaults",
-			"name", hyperConvergedName,
-			"namespace", hyperConvergedNamespace,
+			"name", profileutils.HyperConvergedName,
+			"namespace", profileutils.HyperConvergedNamespace,
 			"error", err)
 		return defaultEvictionLimitsTotal, defaultEvictionLimitsNode
 	}

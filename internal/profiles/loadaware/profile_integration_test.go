@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
 var (
@@ -1032,7 +1033,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 		AfterEach(func() {
 			// Clean up HCO CR if it exists
 			hco := &unstructured.Unstructured{}
-			hco.SetGroupVersionKind(HyperConvergedGVK)
+			hco.SetGroupVersionKind(profileutils.HyperConvergedGVK)
 			hco.SetName(hcoName)
 			hco.SetNamespace(hcoNamespace)
 			_ = integrationK8sClient.Delete(integrationCtx, hco)
@@ -1142,7 +1143,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 		It("should handle HCO CR with missing liveMigrationConfig gracefully", func() {
 			// Create HCO CR without liveMigrationConfig section
 			hco := &unstructured.Unstructured{}
-			hco.SetGroupVersionKind(HyperConvergedGVK)
+			hco.SetGroupVersionKind(profileutils.HyperConvergedGVK)
 			hco.SetName(hcoName)
 			hco.SetNamespace(hcoNamespace)
 			hco.Object["spec"] = map[string]interface{}{
@@ -1160,7 +1161,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 		It("should handle HCO CR with partial liveMigrationConfig", func() {
 			// Create HCO CR with only one limit set
 			hco := &unstructured.Unstructured{}
-			hco.SetGroupVersionKind(HyperConvergedGVK)
+			hco.SetGroupVersionKind(profileutils.HyperConvergedGVK)
 			hco.SetName(hcoName)
 			hco.SetNamespace(hcoNamespace)
 			hco.Object["spec"] = map[string]interface{}{
@@ -1182,7 +1183,7 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 // Helper function to create HCO CR with specific migration limits
 func createHCOWithLimits(perCluster, perNode int64) *unstructured.Unstructured {
 	hco := &unstructured.Unstructured{}
-	hco.SetGroupVersionKind(HyperConvergedGVK)
+	hco.SetGroupVersionKind(profileutils.HyperConvergedGVK)
 	hco.SetName("kubevirt-hyperconverged")
 	hco.SetNamespace("openshift-cnv")
 
