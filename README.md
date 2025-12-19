@@ -2,6 +2,15 @@
 
 An operational governance layer for safe configuration of third-party integrations in KubeVirt environments.
 
+## Table of Contents
+
+- [Description](#description)
+- [Getting Started](#getting-started)
+- [Architecture](#architecture)
+- [Available Profiles](#available-profiles)
+- [Deployment](#deployment)
+- [Contributing](#contributing)
+
 ## Description
 
 The virt-advisor-operator implements a declarative "Plan" pattern for managing configuration changes to external operators and cluster components. It provides a preview-and-approve workflow that enables cluster administrators to safely tune third-party components without direct ownership.
@@ -101,61 +110,86 @@ make kind-delete  # Delete the Kind cluster
 - Troubleshooting common issues
 
 
+## Architecture
+
+### Profile-Based Design
+
+The operator uses a **profile-based architecture** where each profile is a self-contained module that manages specific configurations:
+
+```
+internal/profiles/
+├── profiles.go              # Central registry
+├── profileutils/            # Shared utilities (GVKs, helpers, builders)
+├── loadaware/              # Load-aware rebalancing profile
+├── higherdensity/          # Higher-density profile
+└── example/                # Example profile for testing
+```
+
+**Key design principles:**
+- **One profile per subdirectory** - Enables CODEOWNERS protection for team-specific profiles
+- **Automatic drift detection** - Each profile declares managed resources; controller watches them automatically
+- **Server-Side Apply** - All diffs are generated through SSA for accuracy and validation
+- **Plugin architecture** - Adding new profiles requires no controller changes
+
+👉 **For profile developers**: See [Profile Development Guide](docs/profile-development-guide.md)
+
 ## Available Profiles
 
-### example-profile
-A simple demonstration profile showing basic functionality.
+### 🧪 example-profile
+**Purpose**: Simple demonstration profile showing basic functionality
+**Use for**: Testing and learning the operator workflow
 
-### load-aware-rebalancing
-Implements the VEP's load-aware rebalancing capability by configuring:
-1. **KubeDescheduler**: Enables KubeVirt-aware descheduling profiles with intelligent fallback
-2. **MachineConfig**: Enables PSI (Pressure Stall Information) metrics for load awareness
+### ⚖️ load-aware-rebalancing
 
-**Profile Selection Logic:**
-- **OCP 5.32+**: Uses `KubeVirtRelieveAndMigrate` (GA) with profileCustomizations
-- **OCP 5.14-5.21**: Falls back to `DevKubeVirtRelieveAndMigrate` (dev preview)
-- **OCP 5.10**: Falls back to `LongLifecycle` (no profileCustomizations)
+**Purpose**: Implements load-aware VM rebalancing to prevent hotspots and improve cluster utilization
 
-**Profile Preservation:**
-- Preserves `AffinityAndTaints` and `SoftTopologyAndDuplicates` if they exist
-- Removes other conflicting profiles
+**What it configures:**
+- **KubeDescheduler**: Enables KubeVirt-aware descheduling with intelligent version fallback
+- **MachineConfig** (optional): Enables PSI (Pressure Stall Information) kernel metrics
 
-**Supported Config Overrides:**
-- `deschedulingIntervalSeconds`: How often to run descheduling (default: 60 = 1 minute)
-- `mode`: Controls when descheduling is enabled (default: Automatic)
-  - Valid values: Automatic, Predictive
-  - Automatic: descheduler runs continuously based on the interval
-  - Predictive: (future) uses ML/heuristics to decide when to run
-- `enablePSIMetrics`: Whether to enable PSI kernel metrics (default: true)
-- `devDeviationThresholds`: Deviation threshold for load balancing (default: AsymmetricLow)
-  - Valid values: Low, Medium, High, AsymmetricLow, AsymmetricMedium, AsymmetricHigh
-  - Only applies to KubeVirtRelieveAndMigrate and DevKubeVirtRelieveAndMigrate
+**Configuration options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `deschedulingIntervalSeconds` | `60` | How often to run descheduling (60-86400 seconds) |
+| `mode` | `Automatic` | When to run: `Automatic` (continuous) or `Predictive` (future: ML-based) |
+| `enablePSIMetrics` | `true` | Enable kernel PSI metrics for load awareness |
+| `devDeviationThresholds` | `AsymmetricLow` | Balancing sensitivity: `Low`, `Medium`, `High`, `AsymmetricLow/Medium/High` |
+
+**Version compatibility:**
+- **OCP 5.32+**: `KubeVirtRelieveAndMigrate` (GA)
+- **OCP 5.14-5.21**: `DevKubeVirtRelieveAndMigrate` (dev preview)
+- **OCP 5.10**: `LongLifecycle` fallback
 
 **Impact:**
-- Medium: Creates or updates descheduler configuration
-- High: Enables PSI metrics (requires node reboot in real OpenShift clusters)
+- 🟡 **Medium**: Descheduler configuration changes (no reboot)
+- 🔴 **High**: PSI metrics enablement (requires node reboot)
 
-### virt-higher-density
-Implements higher VM density configurations for virtualization workloads by enabling kubelet swap and memory overcommitment.
+---
 
-**Configuration:**
-1. **MachineConfig**: Deploys swap configuration for worker nodes
-   - Provisions swap from partition labeled `CNV_SWAP`
-   - Configures kubelet with `LimitedSwap` behavior
-   - Sets up systemd units for swap management
-   - Restricts swap usage for system slice
+### 📦 virt-higher-density
 
-**Supported Config Options:**
-- `enableSwap`: Whether to enable swap on worker nodes (default: true)
+**Purpose**: Enables higher VM density through kubelet swap and memory overcommitment
 
-**Impact:**
-- High: Requires node reboot for swap configuration changes
+**What it configures:**
+- **MachineConfig**: Deploys swap configuration for worker nodes
+  - Provisions swap from partition labeled `CNV_SWAP`
+  - Configures kubelet with `LimitedSwap` behavior
+  - Sets up systemd units for swap management
+  - Restricts swap usage for system processes
+
+**Configuration options:**
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enableSwap` | `true` | Enable swap on worker nodes |
 
 **Prerequisites:**
-- Nodes must have a swap partition labeled with `CNV_SWAP`
-- MachineConfig CRD (available on OpenShift)
+- Nodes must have swap partition labeled `CNV_SWAP`
+- MachineConfig CRD (OpenShift only)
 
-**Example:**
+**Impact:**
+- 🔴 **High**: Requires node reboot for swap configuration
+
+**Example usage:**
 ```yaml
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
@@ -297,7 +331,46 @@ previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml
 is manually re-applied afterwards.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+
+### Developing New Profiles
+
+To create a new profile for managing additional cluster configurations:
+
+1. **Read the guide**: See [Profile Development Guide](docs/profile-development-guide.md) for complete instructions
+2. **Create subdirectory**: `internal/profiles/myprofile/`
+3. **Implement interface**: Profile with `GeneratePlanItems()`, `GetPrerequisites()`, etc.
+4. **Add tests**: Integration tests in the same subdirectory
+5. **Register**: Add to `internal/profiles/profiles.go` init function
+6. **Protect with CODEOWNERS**: Add your team to `.github/CODEOWNERS`
+
+**Key principles:**
+- Use `profileutils.NewPlanItemBuilder()` for generating plan items (never manual diffs)
+- Each profile is self-contained in its own package
+- Server-Side Apply ensures accurate diffs with API validation
+- Integration tests use envtest with real Kubernetes API server
+
+### General Contributions
+
+We welcome contributions! Areas where help is needed:
+- Additional profiles for KubeVirt/OpenShift integrations
+- Enhanced drift detection capabilities
+- Documentation improvements
+- Test coverage expansion
+
+**Development workflow:**
+```sh
+# Set up local environment
+make dev-setup
+
+# Run tests
+make test
+
+# Run e2e tests (requires Kind cluster)
+make test-e2e
+
+# Run the operator locally
+make run
+```
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
 
