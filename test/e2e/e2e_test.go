@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -248,7 +249,7 @@ func serviceAccountToken() (string, error) {
 
 		// Parse the JSON output to extract the token
 		var token tokenRequest
-		err = json.Unmarshal(output, &token)
+		err = json.Unmarshal([]byte(output), &token)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		out = token.Status.Token
@@ -331,3 +332,339 @@ type tokenRequest struct {
 		Token string `json:"token"`
 	} `json:"status"`
 }
+
+var _ = Describe("Operator Upgrade Scenarios", Ordered, func() {
+	// Must match the profile name due to singleton pattern CEL validation
+	const vpcName = "example-profile"
+
+	AfterEach(func() {
+		By("Cleaning up VirtPlatformConfig")
+		cmd := exec.Command("kubectl", "delete", "virtplatformconfig", vpcName, "--ignore-not-found=true")
+		_, _ = utils.Run(cmd)
+	})
+
+	Context("When operator is upgraded", func() {
+		It("should detect profile logic changes and transition to CompletedWithUpgrade", func() {
+			By("Creating a VirtPlatformConfig with example-profile")
+			vpcYAML := fmt.Sprintf(`
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: %s
+spec:
+  profile: %s
+  action: Apply
+`, vpcName, vpcName)
+
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(vpcYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for VirtPlatformConfig to reach Completed phase")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 2*time.Minute, 2*time.Second).Should(Equal("Completed"))
+
+			By("Simulating operator upgrade with changed profile logic")
+			// Simulate OLD operator version by:
+			// 1. Changing status.items to represent what old operator generated (different item name)
+			// 2. Setting status.operatorVersion to old version
+			// This simulates the scenario where the new operator produces different configuration
+			oldItemsPatch := `{
+				"status": {
+					"operatorVersion": "v0.1.30",
+					"items": [{
+						"name": "configure-old-component",
+						"targetRef": {
+							"apiVersion": "v1",
+							"kind": "ConfigMap",
+							"name": "example-config",
+							"namespace": "default"
+						},
+						"impactSeverity": "Low",
+						"state": "Completed",
+						"message": "Applied successfully"
+					}]
+				}
+			}`
+
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", vpcName,
+				"--type=merge", "--subresource=status",
+				"-p", oldItemsPatch)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for transition to CompletedWithUpgrade phase")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 1*time.Minute, 2*time.Second).Should(Equal("CompletedWithUpgrade"))
+
+			By("Verifying UpgradeAvailable condition is set")
+			Eventually(func() bool {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return false
+				}
+
+				var vpc map[string]interface{}
+				if err := json.Unmarshal([]byte(output), &vpc); err != nil {
+					return false
+				}
+
+				status, ok := vpc["status"].(map[string]interface{})
+				if !ok {
+					return false
+				}
+
+				conditions, ok := status["conditions"].([]interface{})
+				if !ok {
+					return false
+				}
+
+				for _, c := range conditions {
+					cond, ok := c.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if cond["type"] == "UpgradeAvailable" && cond["status"] == "True" {
+						return true
+					}
+				}
+				return false
+			}, 30*time.Second, 2*time.Second).Should(BeTrue())
+		})
+
+		It("should allow user to adopt upgrade by regenerating plan", func() {
+			By("Creating a VirtPlatformConfig")
+			vpcYAML := fmt.Sprintf(`
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: %s
+spec:
+  profile: %s
+  action: Apply
+`, vpcName, vpcName)
+
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(vpcYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for Completed phase")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 2*time.Minute, 2*time.Second).Should(Equal("Completed"))
+
+			By("Simulating upgrade with changed profile logic")
+			// Simulate OLD operator version with different items
+			oldItemsPatch := `{
+				"status": {
+					"operatorVersion": "v0.1.30",
+					"items": [{
+						"name": "configure-old-component",
+						"targetRef": {
+							"apiVersion": "v1",
+							"kind": "ConfigMap",
+							"name": "example-config",
+							"namespace": "default"
+						},
+						"impactSeverity": "Low",
+						"state": "Completed",
+						"message": "Applied successfully"
+					}]
+				}
+			}`
+
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", vpcName,
+				"--type=merge", "--subresource=status",
+				"-p", oldItemsPatch)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for CompletedWithUpgrade phase")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 1*time.Minute, 2*time.Second).Should(Equal("CompletedWithUpgrade"))
+
+			By("User regenerates plan by changing action to DryRun")
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", vpcName,
+				"--type=merge",
+				"-p", `{"spec":{"action":"DryRun"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying plan regenerates and reaches ReviewRequired")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 1*time.Minute, 2*time.Second).Should(Equal("ReviewRequired"))
+
+			By("User applies the new plan")
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", vpcName,
+				"--type=merge",
+				"-p", `{"spec":{"action":"Apply"}}`)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Verifying plan reaches Completed with new operator version")
+			Eventually(func() bool {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return false
+				}
+
+				var vpc map[string]interface{}
+				if err := json.Unmarshal([]byte(output), &vpc); err != nil {
+					return false
+				}
+
+				status, ok := vpc["status"].(map[string]interface{})
+				if !ok {
+					return false
+				}
+
+				phase, _ := status["phase"].(string)
+				operatorVersion, _ := status["operatorVersion"].(string)
+
+				// Check phase is Completed and operatorVersion is updated
+				return phase == "Completed" && operatorVersion != "v0.1.30"
+			}, 2*time.Minute, 2*time.Second).Should(BeTrue())
+
+			By("Verifying UpgradeAvailable condition is cleared")
+			Eventually(func() bool {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return false
+				}
+
+				var vpc map[string]interface{}
+				if err := json.Unmarshal([]byte(output), &vpc); err != nil {
+					return false
+				}
+
+				status, ok := vpc["status"].(map[string]interface{})
+				if !ok {
+					return false
+				}
+
+				conditions, ok := status["conditions"].([]interface{})
+				if !ok {
+					return false
+				}
+
+				for _, c := range conditions {
+					cond, ok := c.(map[string]interface{})
+					if !ok {
+						continue
+					}
+					if cond["type"] == "UpgradeAvailable" && cond["status"] == "True" {
+						return false // Still has upgrade condition
+					}
+				}
+				return true
+			}, 30*time.Second, 2*time.Second).Should(BeTrue())
+		})
+
+		It("should be visible in kubectl get output", func() {
+			By("Creating a VirtPlatformConfig")
+			vpcYAML := fmt.Sprintf(`
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: %s
+spec:
+  profile: %s
+  action: Apply
+`, vpcName, vpcName)
+
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = bytes.NewBufferString(vpcYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Waiting for Completed phase")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName,
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 2*time.Minute, 2*time.Second).Should(Equal("Completed"))
+
+			By("Simulating upgrade with changed profile logic")
+			// Simulate OLD operator version with different items
+			oldItemsPatch := `{
+				"status": {
+					"operatorVersion": "v0.1.30",
+					"items": [{
+						"name": "configure-old-component",
+						"targetRef": {
+							"apiVersion": "v1",
+							"kind": "ConfigMap",
+							"name": "example-config",
+							"namespace": "default"
+						},
+						"impactSeverity": "Low",
+						"state": "Completed",
+						"message": "Applied successfully"
+					}]
+				}
+			}`
+
+			cmd = exec.Command("kubectl", "patch", "virtplatformconfig", vpcName,
+				"--type=merge", "--subresource=status",
+				"-p", oldItemsPatch)
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("Checking kubectl get output shows CompletedWithUpgrade")
+			Eventually(func() string {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", vpcName)
+				output, err := utils.Run(cmd)
+				if err != nil {
+					return ""
+				}
+				return string(output)
+			}, 1*time.Minute, 2*time.Second).Should(ContainSubstring("CompletedWithUpgrade"))
+		})
+	})
+})
