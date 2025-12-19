@@ -184,21 +184,22 @@ type VirtHigherDensityConfig struct {
 	EnableSwap *bool `json:"enableSwap,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;Failed;Drifted;Ignored
+// +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;CompletedWithUpgrade;Failed;Drifted;Ignored
 // PlanPhase summarizes the high-level state of the plan.
 type PlanPhase string
 
 const (
-	PlanPhasePending             PlanPhase = "Pending"
-	PlanPhaseDrafting            PlanPhase = "Drafting"
-	PlanPhasePrerequisiteFailed  PlanPhase = "PrerequisiteFailed"
-	PlanPhaseReviewRequired      PlanPhase = "ReviewRequired"
-	PlanPhaseInProgress          PlanPhase = "InProgress"
-	PlanPhaseCompleted           PlanPhase = "Completed"
-	PlanPhaseCompletedWithErrors PlanPhase = "CompletedWithErrors"
-	PlanPhaseFailed              PlanPhase = "Failed"
-	PlanPhaseDrifted             PlanPhase = "Drifted"
-	PlanPhaseIgnored             PlanPhase = "Ignored"
+	PlanPhasePending              PlanPhase = "Pending"
+	PlanPhaseDrafting             PlanPhase = "Drafting"
+	PlanPhasePrerequisiteFailed   PlanPhase = "PrerequisiteFailed"
+	PlanPhaseReviewRequired       PlanPhase = "ReviewRequired"
+	PlanPhaseInProgress           PlanPhase = "InProgress"
+	PlanPhaseCompleted            PlanPhase = "Completed"
+	PlanPhaseCompletedWithErrors  PlanPhase = "CompletedWithErrors"
+	PlanPhaseCompletedWithUpgrade PlanPhase = "CompletedWithUpgrade"
+	PlanPhaseFailed               PlanPhase = "Failed"
+	PlanPhaseDrifted              PlanPhase = "Drifted"
+	PlanPhaseIgnored              PlanPhase = "Ignored"
 )
 
 // +kubebuilder:validation:Enum=Pending;InProgress;Completed;Failed

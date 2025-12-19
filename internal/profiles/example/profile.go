@@ -18,8 +18,10 @@ package example
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -82,6 +84,23 @@ func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client,
 	// 2. Determine what changes are needed
 	// 3. Generate plan items with diffs
 
+	// Create a simple ConfigMap as the desired state
+	desiredState := map[string]interface{}{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]interface{}{
+			"name":      "example-config",
+			"namespace": "openshift-cnv",
+		},
+		"data": map[string]interface{}{
+			"example-key": "example-value",
+		},
+	}
+	rawJSON, err := json.Marshal(desiredState)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal desired state: %w", err)
+	}
+
 	items := []advisorv1alpha1.VirtPlatformConfigItem{
 		{
 			Name: "configure-example-component",
@@ -89,11 +108,15 @@ func (p *ExampleProfile) GeneratePlanItems(ctx context.Context, c client.Client,
 				APIVersion: "v1",
 				Kind:       "ConfigMap",
 				Name:       "example-config",
-				Namespace:  "default",
+				Namespace:  "openshift-cnv",
 			},
 			ImpactSeverity: advisorv1alpha1.ImpactLow,
 			State:          advisorv1alpha1.ItemStatePending,
 			Message:        "Waiting to apply configuration",
+			// Generate a fake diff for testing purposes
+			// Real profiles would call plan.GenerateSSADiff() to create this
+			Diff:         "--- example-config (ConfigMap)\n+++ example-config (ConfigMap)\n+  data:\n+    example-key: example-value\n",
+			DesiredState: &runtime.RawExtension{Raw: rawJSON},
 		},
 	}
 

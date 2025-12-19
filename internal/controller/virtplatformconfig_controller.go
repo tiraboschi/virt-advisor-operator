@@ -63,6 +63,7 @@ const (
 	ConditionTypePrereqFail   = "PrerequisiteFailed"
 	ConditionTypeCompletedErr = "CompletedWithErrors"
 	ConditionTypeIgnored      = "Ignored"
+	ConditionTypeUpgrade      = "UpgradeAvailable"
 )
 
 // Condition reasons
@@ -204,6 +205,8 @@ func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.R
 		err = r.handleCompletedPhase(ctx, configPlan)
 	case advisorv1alpha1.PlanPhaseCompletedWithErrors:
 		err = r.handleCompletedPhase(ctx, configPlan)
+	case advisorv1alpha1.PlanPhaseCompletedWithUpgrade:
+		err = r.handleCompletedWithUpgradePhase(ctx, configPlan)
 	case advisorv1alpha1.PlanPhaseDrifted:
 		// Check if spec has changed (e.g., user changed action to DryRun for regeneration)
 		if configPlan.Status.ObservedGeneration != configPlan.Generation {
@@ -907,6 +910,62 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 			"Options changed - regenerating plan")
 	}
 
+	// Check if operator version has changed (upgrade detected)
+	if configPlan.Status.OperatorVersion != "" && configPlan.Status.OperatorVersion != OperatorVersion {
+		logger.Info("Operator version changed - checking if profile logic changed",
+			"appliedVersion", configPlan.Status.OperatorVersion,
+			"currentVersion", OperatorVersion)
+
+		// Regenerate plan items using NEW operator logic (in-memory, not persisted)
+		newItems, err := r.generatePlanItemsWithNewLogic(ctx, configPlan)
+		if err != nil {
+			logger.Error(err, "Failed to generate new plan items for upgrade comparison")
+			// Don't fail - just skip upgrade detection this cycle
+		} else {
+			// Compare new items vs currently applied items
+			if planItemsDiffer(newItems, configPlan.Status.Items) {
+				logger.Info("Upgrade would change configuration - transitioning to CompletedWithUpgrade phase",
+					"appliedVersion", configPlan.Status.OperatorVersion,
+					"currentVersion", OperatorVersion)
+
+				// Set UpgradeAvailable condition
+				r.setCondition(configPlan, ConditionTypeUpgrade, metav1.ConditionTrue, "LogicChanged",
+					fmt.Sprintf("Operator upgraded from %s to %s with profile logic changes. "+
+						"Regenerate plan (action=DryRun) to review proposed changes.",
+						configPlan.Status.OperatorVersion, OperatorVersion))
+
+				// Transition to CompletedWithUpgrade phase for visibility
+				return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseCompletedWithUpgrade,
+					fmt.Sprintf("Operator upgraded from %s to %s - profile logic changes detected",
+						configPlan.Status.OperatorVersion, OperatorVersion))
+			}
+
+			// Upgrade detected but no changes - silently update version
+			logger.Info("Upgrade detected but profile logic unchanged - no user action needed",
+				"appliedVersion", configPlan.Status.OperatorVersion,
+				"currentVersion", OperatorVersion)
+
+			// Clear any stale UpgradeAvailable condition
+			r.setCondition(configPlan, ConditionTypeUpgrade, metav1.ConditionFalse, "NoLogicChange",
+				"Operator upgraded but profile logic unchanged")
+
+			// Update stored version to suppress future checks
+			configPlan.Status.OperatorVersion = OperatorVersion
+			return r.Status().Update(ctx, configPlan)
+		}
+	}
+
+	// Clear UpgradeAvailable if operator version matches (e.g., after user regenerated)
+	if configPlan.Status.OperatorVersion == OperatorVersion {
+		for _, c := range configPlan.Status.Conditions {
+			if c.Type == ConditionTypeUpgrade && c.Status == metav1.ConditionTrue {
+				r.setCondition(configPlan, ConditionTypeUpgrade, metav1.ConditionFalse, "Applied",
+					"Upgrade changes applied")
+				return r.Status().Update(ctx, configPlan)
+			}
+		}
+	}
+
 	// Check if HCO-derived input dependencies have changed (for load-aware profile)
 	if changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan); changed {
 		logger.Info("HCO input dependencies changed, regenerating plan", "reason", reason)
@@ -1069,6 +1128,58 @@ func (r *VirtPlatformConfigReconciler) ensureCompletedPhaseConditions(ctx contex
 		return r.Status().Update(ctx, configPlan)
 	}
 
+	return nil
+}
+
+// handleCompletedWithUpgradePhase handles the state where configuration is applied successfully
+// but a new operator version has different profile logic available.
+// Implements auto-recovery: if cluster is manually aligned with new logic, transitions back to Completed.
+func (r *VirtPlatformConfigReconciler) handleCompletedWithUpgradePhase(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) error {
+	logger := log.FromContext(ctx)
+	logger.Info("Handling CompletedWithUpgrade phase - waiting for user to review upgrade or checking for auto-resolution")
+
+	// Check if spec has changed (user regenerated plan to adopt upgrade)
+	if configPlan.Status.ObservedGeneration != configPlan.Generation {
+		logger.Info("Spec changed - user regenerating plan to adopt upgrade")
+		return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhasePending,
+			"User regenerating plan to adopt operator upgrade")
+	}
+
+	// AUTO-RECOVERY: Re-check if upgrade would still cause changes
+	// This handles the case where admin manually updated cluster to match new operator logic
+	if configPlan.Status.OperatorVersion != "" && configPlan.Status.OperatorVersion != OperatorVersion {
+		newItems, err := r.generatePlanItemsWithNewLogic(ctx, configPlan)
+		if err != nil {
+			logger.Error(err, "Failed to regenerate plan items for upgrade auto-recovery check")
+			// Don't fail - just skip auto-recovery this cycle
+			return nil
+		}
+
+		// Compare new items vs currently applied items
+		if !planItemsDiffer(newItems, configPlan.Status.Items) {
+			// Upgrade diff has disappeared! Cluster was manually aligned with new logic
+			logger.Info("Upgrade drift resolved - cluster manually aligned with new operator logic, transitioning to Completed",
+				"appliedVersion", configPlan.Status.OperatorVersion,
+				"currentVersion", OperatorVersion)
+
+			// Clear UpgradeAvailable condition
+			r.setCondition(configPlan, ConditionTypeUpgrade, metav1.ConditionFalse, "ManuallyAligned",
+				"Cluster manually aligned with new operator logic - upgrade no longer needed")
+
+			// Silently update operator version
+			configPlan.Status.OperatorVersion = OperatorVersion
+
+			// Transition back to Completed
+			return r.updatePhase(ctx, configPlan, advisorv1alpha1.PlanPhaseCompleted,
+				"Upgrade auto-resolved - cluster aligned with new operator logic")
+		}
+
+		// Still different - stay in CompletedWithUpgrade and wait for user action
+		logger.V(1).Info("Upgrade still needed - waiting for user to regenerate plan")
+	}
+
+	// Waiting for user to regenerate plan (change action to DryRun)
+	logger.Info("Waiting for user to regenerate plan to adopt operator upgrade (change action to DryRun)")
 	return nil
 }
 
@@ -1336,6 +1447,18 @@ func (r *VirtPlatformConfigReconciler) setPhaseConditions(configPlan *advisorv1a
 		r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionFalse, ReasonCompletedWithErrors, MessageCompletedWithErrors)
 		// Note: Failed condition is NOT cleared here - CompletedWithErrors is a partial failure state
 
+	case advisorv1alpha1.PlanPhaseCompletedWithUpgrade:
+		r.setCondition(configPlan, ConditionTypeIgnored, metav1.ConditionFalse, ReasonNotIgnored, MessageNotIgnored)
+		r.setCondition(configPlan, ConditionTypePending, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypeDrafting, metav1.ConditionFalse, ReasonNotDrafting, MessageNotDrafting)
+		r.setCondition(configPlan, ConditionTypeInProgress, metav1.ConditionFalse, ReasonNotInProgress, MessageNotInProgressCompleted)
+		r.setCondition(configPlan, ConditionTypeReviewReq, metav1.ConditionFalse, ReasonNotCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypeCompleted, metav1.ConditionTrue, ReasonCompleted, MessageCompletedSuccess)
+		r.setCondition(configPlan, ConditionTypeDrifted, metav1.ConditionFalse, ReasonNoDrift, MessageNoDrift)
+		r.setCondition(configPlan, ConditionTypePrereqFail, metav1.ConditionFalse, ReasonCompleted, "All prerequisites met")
+		r.setCondition(configPlan, ConditionTypeFailed, metav1.ConditionFalse, ReasonCompleted, "No failures occurred")
+		// Note: UpgradeAvailable condition is set separately in handleCompletedPhase logic
+
 	case advisorv1alpha1.PlanPhaseFailed:
 		// Use customMessage if provided, otherwise use default
 		failedMessage := MessageCompletedFailed
@@ -1553,6 +1676,101 @@ func (r *VirtPlatformConfigReconciler) extractAppliedEvictionLimits(ctx context.
 	}
 
 	return int32(total), int32(node), nil
+}
+
+// generatePlanItemsWithNewLogic generates plan items using current operator logic
+// without modifying the VirtPlatformConfig status. Used for upgrade detection.
+func (r *VirtPlatformConfigReconciler) generatePlanItemsWithNewLogic(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) ([]advisorv1alpha1.VirtPlatformConfigItem, error) {
+	profile, err := profiles.DefaultRegistry.Get(configPlan.Spec.Profile)
+	if err != nil {
+		return nil, fmt.Errorf("profile not found: %w", err)
+	}
+
+	// Convert ProfileOptions to map for backward compatibility
+	configMap := profiles.OptionsToMap(configPlan.Spec.Profile, configPlan.Spec.Options)
+
+	// Generate items using current logic
+	items, err := profile.GeneratePlanItems(ctx, r.Client, configMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate plan items: %w", err)
+	}
+
+	return items, nil
+}
+
+// planItemsDiffer compares two sets of plan items to detect meaningful changes.
+// Returns true if the configuration differs (not just execution state).
+func planItemsDiffer(current, applied []advisorv1alpha1.VirtPlatformConfigItem) bool {
+	// Different number of items = definitely different
+	if len(current) != len(applied) {
+		return true
+	}
+
+	// Build a map of applied items for efficient lookup
+	appliedMap := make(map[string]*advisorv1alpha1.VirtPlatformConfigItem)
+	for i := range applied {
+		appliedMap[applied[i].Name] = &applied[i]
+	}
+
+	// Compare each current item against applied
+	for i := range current {
+		currentItem := &current[i]
+		appliedItem, exists := appliedMap[currentItem.Name]
+
+		if !exists {
+			// New item added
+			return true
+		}
+
+		// Compare meaningful fields (ignore execution state/timestamps)
+		if itemConfigDiffers(currentItem, appliedItem) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// itemConfigDiffers compares the configuration aspects of two items.
+// Ignores execution state (State, Message, LastTransitionTime).
+func itemConfigDiffers(current, applied *advisorv1alpha1.VirtPlatformConfigItem) bool {
+	// Compare target reference
+	if current.TargetRef != applied.TargetRef {
+		return true
+	}
+
+	// Compare impact severity
+	if current.ImpactSeverity != applied.ImpactSeverity {
+		return true
+	}
+
+	// Compare desired state (the actual configuration)
+	if current.DesiredState == nil && applied.DesiredState != nil {
+		return true
+	}
+	if current.DesiredState != nil && applied.DesiredState == nil {
+		return true
+	}
+	if current.DesiredState != nil && applied.DesiredState != nil {
+		// Deep compare the JSON
+		currentJSON, _ := json.Marshal(current.DesiredState)
+		appliedJSON, _ := json.Marshal(applied.DesiredState)
+		if string(currentJSON) != string(appliedJSON) {
+			return true
+		}
+	}
+
+	// Compare managed fields
+	if len(current.ManagedFields) != len(applied.ManagedFields) {
+		return true
+	}
+	for i := range current.ManagedFields {
+		if current.ManagedFields[i] != applied.ManagedFields[i] {
+			return true
+		}
+	}
+
+	return false
 }
 
 // managedResourcePredicate returns a predicate that filters events to only managed resources.

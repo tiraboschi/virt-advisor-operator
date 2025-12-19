@@ -132,6 +132,41 @@ As an admin troubleshooting an issue, I want to take manual control of resources
 5.  When ready to resume operator management, I change the action back to `DryRun` or `Apply`.
 6.  The Operator resets to `Pending` phase and regenerates the plan from scratch based on current cluster state.
 
+#### Story 4: Operator Upgrade Detection and Smart Adoption
+As an admin who upgraded the virt-advisor-operator, I want to be notified about new profile logic only when it would actually change my cluster configuration.
+
+**Scenario A: Upgrade with Logic Changes (User Notification Required)**
+1.  I have VirtPlatformConfig "load-aware-rebalancing" in `phase: Completed` with `status.operatorVersion: v0.1.30`
+2.  The cluster has Descheduler configured with `evictionLimits.total: 5` (from old operator logic)
+3.  I upgrade the virt-advisor-operator to `v0.1.31` via OLM
+4.  **New operator behavior**: The new version changes the eviction limit calculation to `total: 10` for better performance
+5.  The Operator detects version mismatch and regenerates plan items in-memory using new logic
+6.  **Semantic comparison**: Compares new items vs. applied items - detects that DesiredState differs (5 → 10)
+7.  The Operator transitions to `phase: CompletedWithUpgrade` and sets `UpgradeAvailable=True` condition
+8.  I see the upgrade notification in `kubectl get virtplatformconfig` output
+9.  I review the upgrade: `kubectl patch virtplatformconfig load-aware-rebalancing -p '{"spec": {"action": "DryRun"}}'`
+10. The Operator regenerates the plan with new v0.1.31 logic and shows the diff in status
+11. I approve the upgrade: `kubectl patch virtplatformconfig load-aware-rebalancing -p '{"spec": {"action": "Apply"}}'`
+12. The Operator applies the new configuration, updates `status.operatorVersion: v0.1.31`, and returns to `phase: Completed`
+
+**Scenario B: Upgrade Without Logic Changes (Silent Update)**
+1.  I have VirtPlatformConfig "virt-higher-density" in `phase: Completed` with `status.operatorVersion: v0.1.30`
+2.  I upgrade the virt-advisor-operator to `v0.1.31` via OLM
+3.  **New operator behavior**: The new version has bug fixes but produces identical configuration
+4.  The Operator detects version mismatch and regenerates plan items in-memory
+5.  **Semantic comparison**: Compares new items vs. applied items - detects NO differences
+6.  The Operator **silently** updates `status.operatorVersion: v0.1.31`
+7.  The phase **stays** `Completed` - no user notification required
+8.  My cluster continues running without interruption
+
+**Scenario C: Auto-Recovery After Manual Alignment**
+1.  I have VirtPlatformConfig in `phase: CompletedWithUpgrade` with `UpgradeAvailable=True`
+2.  Instead of using the operator, I manually update the Descheduler to match the new operator's logic: `kubectl patch kubedescheduler cluster -p '{"spec": {"evictionLimits": {"total": 10}}}'`
+3.  The Operator reconciles and regenerates plan items in-memory
+4.  **Semantic comparison**: Detects that current cluster state now matches new logic
+5.  The Operator **auto-resolves**: clears `UpgradeAvailable` condition, updates `status.operatorVersion`, returns to `phase: Completed`
+6.  No further action needed - the cluster is already aligned with the new version
+
 ### API Design
 
 ```yaml
@@ -316,38 +351,71 @@ sequenceDiagram
 ```
 
 #### 5. Release & Evolution Strategy (Upgrades)
-To ensure stability during operator upgrades, we adhere to a **"Sticky Logic"** policy.
+To ensure stability during operator upgrades, we adhere to a **"Sticky Logic"** policy with **intelligent upgrade detection**.
+
+**Smart Upgrade Detection:**
+
+The operator only notifies users about upgrades when profile logic changes would **actually affect the cluster configuration**. If a new operator version produces the exact same configuration, no user notification occurs - the version is silently updated.
 
 **Upgrade Workflow:**
-1.  **Detection:** When the Operator upgrades, it recalculates the *ideal state* using new code.
-2.  **Comparison:** It compares this new ideal vs. the currently applied items.
-3.  **Action:** If logic differs, it sets `UpgradeAvailable=True` but does **not** touch the cluster.
-4.  **User Action:** To apply the new logic, the user must re-trigger the Plan (`DryRun` -> `Apply`).
+1.  **Detection:** When the operator detects a version mismatch (`status.operatorVersion != OperatorVersion`), it regenerates plan items in-memory using the new profile logic
+2.  **Semantic Comparison:** The operator performs a deep comparison of:
+    - Desired state (actual configuration JSON)
+    - Number of plan items (new resources added/removed)
+    - Target references (different resources being managed)
+    - Impact severity changes
+    - Managed fields
+3.  **Smart Decision:**
+    - **If configuration differs:** Transition to `CompletedWithUpgrade` phase and set `UpgradeAvailable=True` condition
+    - **If configuration identical:** Silently update `status.operatorVersion` - stay in `Completed` phase
+4.  **Visibility:** New phase `CompletedWithUpgrade` makes upgrade availability immediately visible in `kubectl get` output
+5.  **Auto-Recovery:** If admin manually updates cluster to match new operator logic, the diff disappears and operator automatically transitions back to `Completed` phase with silent version update
+6.  **User Action:** To adopt upgrade, user must regenerate plan (`action=DryRun`) then approve (`action=Apply`)
 
 ```mermaid
 sequenceDiagram
     participant Admin
     participant Plan as VirtPlatformConfig
-    participant OpV2 as Operator v2.0
+    participant OpV1 as Operator v0.1.30
+    participant OpV2 as Operator v0.1.31
 
-    Note over Plan: Applied (v1 logic)
-    
-    Note over Admin: 1. Admin Upgrades Operator
-    Admin->>OpV2: Deploy v2.0
-    
-    OpV2->>Plan: Reconcile & Calc v2 Logic
-    OpV2->>OpV2: Compare with v1 Applied State
-    
-    alt Logic Changed
-        OpV2->>Plan: Set Condition: UpgradeAvailable=True
-        Note over Plan: State remains "Completed" (No auto-change)
+    Note over Plan: Phase: Completed<br/>status.operatorVersion: v0.1.30<br/>Descheduler: evictionLimits.total=5
+
+    Note over Admin: Admin Upgrades Operator
+    Admin->>OpV2: Deploy v0.1.31
+
+    OpV2->>Plan: Reconcile (Completed phase)
+    OpV2->>OpV2: Detect version mismatch:<br/>status.operatorVersion=v0.1.30<br/>OperatorVersion=v0.1.31
+    OpV2->>OpV2: Regenerate plan items in-memory<br/>using new v0.1.31 logic
+    OpV2->>OpV2: Compare new items vs applied items<br/>(DesiredState, TargetRef, ImpactSeverity, etc.)
+
+    alt Configuration Differs (Logic Changed)
+        OpV2->>Plan: Set Condition:<br/>UpgradeAvailable=True, reason=LogicChanged
+        OpV2->>Plan: Transition to:<br/>Phase=CompletedWithUpgrade
+        Note over Plan: Phase: CompletedWithUpgrade<br/>Visible in kubectl get output
+
+        Note over Admin: Scenario A: User Reviews Upgrade
+        Admin->>Plan: Set action=DryRun
+        OpV2->>Plan: Generate new plan with v0.1.31 logic<br/>Update status.items with new diffs
+        Admin->>Plan: Review diffs, Set action=Apply
+        OpV2->>Plan: Execute plan with v0.1.31 logic
+        OpV2->>Plan: Update status.operatorVersion=v0.1.31<br/>Clear UpgradeAvailable condition<br/>Phase=Completed
+
+        Note over Admin: Scenario B: Auto-Recovery
+        Admin->>Plan: Manually update cluster<br/>(e.g., kubectl patch descheduler)
+        OpV2->>Plan: Reconcile (CompletedWithUpgrade phase)
+        OpV2->>OpV2: Regenerate plan items in-memory<br/>Compare with current cluster state
+        OpV2->>OpV2: Detect: No diff!<br/>Cluster matches new logic
+        OpV2->>Plan: Clear Condition:<br/>UpgradeAvailable=False, reason=ManuallyAligned
+        OpV2->>Plan: Silently update:<br/>status.operatorVersion=v0.1.31
+        OpV2->>Plan: Transition to:<br/>Phase=Completed
+        Note over Plan: Auto-recovered -<br/>upgrade no longer needed
+    else Configuration Identical (No Logic Change)
+        OpV2->>Plan: Set Condition:<br/>UpgradeAvailable=False, reason=NoLogicChange
+        OpV2->>Plan: Silently update:<br/>status.operatorVersion=v0.1.31
+        Note over Plan: Phase stays: Completed<br/>No user action needed
+        Note over Admin: No notification -<br/>upgrade transparent to user
     end
-    
-    Note over Admin: 2. Manual Upgrade
-    Admin->>Plan: Set action: DryRun
-    OpV2->>Plan: Update status.diff (Show v2 changes)
-    Admin->>Plan: Set action: Apply
-    OpV2->>Plan: Apply v2 Logic
 ```
 
 #### 6. Execution Orchestration (The Sequential Engine)

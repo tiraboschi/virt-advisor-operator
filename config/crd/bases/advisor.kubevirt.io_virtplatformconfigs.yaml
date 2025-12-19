@@ -472,6 +472,7 @@ spec:
                 - InProgress
                 - Completed
                 - CompletedWithErrors
+                - CompletedWithUpgrade
                 - Failed
                 - Drifted
                 - Ignored
