@@ -335,6 +335,90 @@ var _ = Describe("VirtPlatformConfig Controller", func() {
 				return resource.Status.Phase
 			}).Should(Equal(advisorv1alpha1.PlanPhasePending))
 		})
+
+		It("should update condition message when some prerequisites become available", func() {
+			By("creating a VirtPlatformConfig for a profile with multiple prerequisites")
+			// Use a profile name that will trigger prerequisite checks
+			// We'll simulate the scenario by manually setting up the status
+			multiPrereqName := types.NamespacedName{Name: "load-aware-rebalancing"}
+			resource := &advisorv1alpha1.VirtPlatformConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: multiPrereqName.Name,
+				},
+				Spec: advisorv1alpha1.VirtPlatformConfigSpec{
+					Profile: multiPrereqName.Name,
+					Action:  advisorv1alpha1.PlanActionDryRun,
+				},
+			}
+
+			// Clean up after test
+			defer func() {
+				_ = k8sClient.Delete(ctx, resource)
+			}()
+
+			err := k8sClient.Get(ctx, multiPrereqName, resource)
+			if err != nil && errors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			}
+
+			By("simulating PrerequisiteFailed with multiple missing prerequisites")
+			Eventually(func() error {
+				err := k8sClient.Get(ctx, multiPrereqName, resource)
+				if err != nil {
+					return err
+				}
+				resource.Status.Phase = advisorv1alpha1.PlanPhasePrerequisiteFailed
+				resource.Status.ObservedGeneration = resource.Generation
+				resource.Status.Conditions = []metav1.Condition{
+					{
+						Type:               "PrerequisiteFailed",
+						Status:             metav1.ConditionTrue,
+						Reason:             "PrerequisiteFailed",
+						Message:            "Missing required dependencies:\n  - KubeDescheduler (operator.openshift.io.v1): Please install the Descheduler Operator via OLM\n  - HyperConverged (hco.kubevirt.io.v1beta1): Please install OpenShift Virtualization via OLM",
+						LastTransitionTime: metav1.Now(),
+					},
+				}
+				return k8sClient.Status().Update(ctx, resource)
+			}).Should(Succeed())
+
+			By("reconciling while prerequisites are still missing")
+			controllerReconciler := &VirtPlatformConfigReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			// First reconciliation - both still missing
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: multiPrereqName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying condition message is updated to reflect current missing prerequisites")
+			// The condition message should be updated even though we stay in PrerequisiteFailed
+			// It should now only mention the prerequisites that are CURRENTLY missing
+			Eventually(func() string {
+				err := k8sClient.Get(ctx, multiPrereqName, resource)
+				if err != nil {
+					return ""
+				}
+				for _, cond := range resource.Status.Conditions {
+					if cond.Type == "PrerequisiteFailed" && cond.Status == metav1.ConditionTrue {
+						return cond.Message
+					}
+				}
+				return ""
+			}).Should(And(
+				ContainSubstring("Missing required dependencies"),
+				// Both KubeDescheduler and HyperConverged should still be listed as missing
+				ContainSubstring("KubeDescheduler"),
+				ContainSubstring("HyperConverged"),
+			))
+
+			By("verifying phase remains PrerequisiteFailed")
+			err = k8sClient.Get(ctx, multiPrereqName, resource)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(resource.Status.Phase).To(Equal(advisorv1alpha1.PlanPhasePrerequisiteFailed))
+		})
 	})
 
 	Context("When detecting no-change plans", func() {
