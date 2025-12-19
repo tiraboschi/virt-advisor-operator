@@ -3,11 +3,11 @@
 |                      |                                                              |
 | :------------------- | :----------------------------------------------------------- |
 | **TEP ID** | NNNN                                                         |
-| **Status** | Provisional                                                  |
+| **Status** | Implementable                                                |
 | **Sig** | sig-compute                                                  |
 | **Authors** | @tiraboschi                                                  |
 | **Created** | 2025-12-10                                                   |
-| **Last Updated** | 2025-12-10                                                   |
+| **Last Updated** | 2025-12-19                                                   |
 
 ## Summary
 
@@ -143,17 +143,36 @@ spec:
   profile: "LoadAwareRebalancing"
   action: "DryRun"
 
-  # NEW: Control how to handle failures in a multi-step plan.
-  # Options: 
+  # Control how to handle failures in a multi-step plan.
+  # Options:
   # - "Abort": (Default) Stop executing subsequent items if one fails.
   # - "Continue": Attempt to apply remaining items even if one fails.
   failurePolicy: "Abort"
+
+  # Emergency escape hatch - disables optimistic locking checks.
+  # WARNING: Dangerous! Only use in recovery scenarios or dev/test environments.
+  # When true, applies changes even if target resources were modified since plan generation.
+  # Defaults to false.
+  bypassOptimisticLock: false
+
+  # Maximum time to wait for resources to become healthy after applying changes.
+  # Particularly important for MachineConfig rollouts that can take hours on large clusters.
+  # If not set, waits indefinitely (recommended for production).
+  # Examples: "30m", "2h", "24h"
+  waitTimeout: "2h"
 
 status:
   phase: InProgress
   sourceSnapshotHash: "sha256:..."
 
-  # NEW: Richer Item Status
+  # Conditions track special situations like drift detection, input changes, etc.
+  conditions:
+    - type: InputDependencyDrift  # Detects when HCO-derived configuration changes
+      status: "False"
+      reason: "NoChange"
+      message: "HCO migration limits unchanged"
+
+  # Richer Item Status
   items:
     - name: "enable-psi-metrics"
       # Plan Data (Calculated in DryRun)
@@ -167,6 +186,10 @@ status:
       # Real-time feedback (e.g., "Waiting for MCP update")
       message: "Waiting for MachineConfigPool 'worker' to stabilize (2/10 nodes updated)"
       lastTransitionTime: "2025-10-10T12:00:00Z"
+
+      # Tracks which spec fields this item manages for focused drift detection
+      managedFields:
+        - "spec.kernelArguments"
 ```
 
 ### Architecture Details
@@ -220,16 +243,37 @@ sequenceDiagram
 #### 3. Handling Concurrent Plans (Singleton Locking)
 To prevent conflicting instructions, we enforce a strict **One-Plan-Per-Profile** rule. A `profile` cannot be managed by multiple `VirtPlatformConfig` objects simultaneously.
 
-**The Logic:**
-If `plan-B` targets profile `LoadAware`, the operator checks if any other active plan exists for `LoadAware`. If yes, `plan-B` is blocked.
+**Implementation Approach:**
+We use **CEL validation** to bind the VirtPlatformConfig name to the profile it manages. This provides compile-time enforcement of the singleton pattern at the API level.
 
-```mermaid
-graph TD
-    A[User creates Plan-B] -->|Profile: LoadAware| B{Check Active Plans}
-    B -->|Plan-A exists & Active| C[Block Plan-B]
-    C --> D[Status: Failed<br/>Reason: ProfileLocked by Plan-A]
-    B -->|No Active Plans| E[Proceed to Draft/Apply]
+**CEL Validation Rule:**
+```yaml
+# +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.profile"
 ```
+
+This ensures that:
+- `VirtPlatformConfig` named "load-aware-rebalancing" can ONLY manage profile "load-aware-rebalancing"
+- Users cannot create multiple VirtPlatformConfigs for the same profile (name collision prevents it)
+- The singleton pattern is enforced declaratively without controller logic
+
+**Example:**
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing  # Must match spec.profile
+spec:
+  profile: load-aware-rebalancing  # CEL validation enforces name == profile
+  action: DryRun
+```
+
+Attempting to create a second VirtPlatformConfig for the same profile will fail with a name conflict error from the Kubernetes API server.
+
+**Benefits of CEL Approach:**
+- ✅ **Declarative:** Enforced at API admission, not controller reconciliation
+- ✅ **Fast:** Rejects invalid configs immediately, no async error handling
+- ✅ **Simple:** No complex controller logic for lock management
+- ✅ **Race-free:** Kubernetes API server handles concurrent create atomically
 
 #### 4. Handling Configuration Churn (Drift Detection)
 Once a plan is `Completed`, the Operator enters a **Governance Watch Mode**. We adopt an **"Inform, Don't Fight"** strategy.
@@ -330,6 +374,222 @@ When `action` is set to `Apply`, the controller executes the generated `items` l
     * The current item is marked `Failed`.
     * The controller logs the error and proceeds to execute item `i+1`.
     * The global Plan Phase becomes `CompletedWithErrors` at the end.
+
+#### 7. Input Dependency Drift Detection
+
+Some profiles derive their configuration from external sources. For example, the `load-aware-rebalancing` profile reads eviction limits from HyperConverged (HCO) CR migration configuration. When these **input dependencies** change externally, the operator must detect this drift and force a review cycle.
+
+**The Problem:**
+Imagine this scenario:
+1. Admin enables `load-aware-rebalancing` with `action: Apply`
+2. Profile reads `spec.liveMigrationConfig.parallelMigrationsPerCluster: 5` from HCO
+3. Descheduler is configured with `evictionLimits.total: 5` (derived from HCO)
+4. Plan reaches `Completed` phase
+5. **Days later:** Another admin modifies HCO to set `parallelMigrationsPerCluster: 10`
+6. **Issue:** The Descheduler still has `evictionLimits.total: 5`, which is now stale and incorrect
+
+**The Solution: InputDependencyDrift Condition**
+
+The controller continuously monitors input dependencies (like HCO) for changes. When detected:
+
+1. **Detection:** Controller compares HCO's current migration limits against the values used when the plan was generated
+2. **Marking:** Sets a special condition `InputDependencyDrift: True` in the VirtPlatformConfig status
+3. **Forced Review:** Transitions the plan to `Drafting` phase to regenerate the plan with current HCO values
+4. **Mandatory User Action:** Even if `spec.action=Apply`, the plan enters `ReviewRequired` phase and blocks auto-execution
+5. **Clear Feedback:** Status message explains which input dependency changed (e.g., "HCO migration limit changed from 5 to 10")
+
+**Handling the Drift:**
+
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant VPC as VirtPlatformConfig
+    participant Operator
+    participant HCO
+    participant Descheduler
+
+    Note over VPC: Phase: Completed (stable)
+    Note over Descheduler: evictionLimits.total: 5
+
+    Admin->>HCO: Modify parallelMigrationsPerCluster: 5 -> 10
+
+    Operator->>HCO: Watch Event
+    Operator->>Operator: Detect: HCO value changed
+    Operator->>VPC: Set Condition: InputDependencyDrift=True
+    Operator->>VPC: Transition: Completed -> Drafting
+
+    Operator->>Operator: Regenerate plan with HCO=10
+    Operator->>VPC: Transition: Drafting -> ReviewRequired (FORCED)
+    Operator->>VPC: Update diff to show evictionLimits.total: 5 -> 10
+
+    Note over Admin: User must review and explicitly approve
+
+    Admin->>VPC: Review diff
+    Admin->>VPC: Acknowledge (modify spec.action or generation)
+
+    Operator->>VPC: Clear Condition: InputDependencyDrift=False
+    Operator->>VPC: Transition: ReviewRequired -> InProgress
+    Operator->>Descheduler: Apply: evictionLimits.total: 10
+```
+
+**Auto-Resolution:**
+If the external change is reverted (e.g., HCO goes back to `parallelMigrationsPerCluster: 5`), the controller detects that the drift has resolved and automatically clears the `InputDependencyDrift` condition, regenerates the plan, and returns to `Completed` phase without user intervention.
+
+**Benefits:**
+- ✅ **Consistency:** Ensures configurations stay synchronized with their input sources
+- ✅ **Safety:** Prevents stale derived configurations from causing operational issues
+- ✅ **Transparency:** Users see exactly what changed and why a review is needed
+- ✅ **Smart Recovery:** Auto-resolves if changes revert
+
+**Implementation:**
+The controller tracks input dependencies via `status.appliedOptions` and periodically reconciles to detect changes. When drift is detected, it sets the `InputDependencyDrift` condition and forces regeneration with mandatory review.
+
+#### 8. Emergency Recovery Mode (Bypass Optimistic Locking)
+
+The optimistic locking mechanism (hash-based staleness checks) is a critical safety feature, but in rare emergency scenarios, it can become an obstacle to recovery. The `spec.bypassOptimisticLock` field provides a controlled escape hatch.
+
+**When to Use (Emergency Scenarios Only):**
+
+1. **Recovery from Manual Interventions:** An admin manually fixed a broken configuration during an incident, and now the operator refuses to apply because the hash doesn't match
+2. **Breaking Circular Dependencies:** Two systems are stuck in a conflict loop, and you need the operator to force-apply to break the cycle
+3. **Development/Testing:** Rapid iteration in dev environments where safety checks slow down experimentation
+
+**How It Works:**
+
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: load-aware-rebalancing
+spec:
+  profile: load-aware-rebalancing
+  action: Apply
+  bypassOptimisticLock: true  # DANGER: Skips staleness checks!
+```
+
+**Behavior Changes:**
+
+| Feature | Normal Mode (`bypassOptimisticLock: false`) | Bypass Mode (`bypassOptimisticLock: true`) |
+|---------|---------------------------------------------|-------------------------------------------|
+| **Hash Validation** | Verifies target resources unchanged since plan generation | ❌ Skips hash check entirely |
+| **Drift Detection** | One-time alert on drift, then stops reconciling | ⚠️ **Aggressive continuous enforcement** - keeps reapplying on every reconciliation |
+| **Failure on Staleness** | Fails with `PlanStale` condition if resources modified | ✅ Applies even if resources were modified |
+| **Safety** | High - prevents overwriting manual changes | ⚠️ **Low - can overwrite any changes** |
+| **Use Case** | Production (default) | Emergency recovery, dev/test only |
+
+**Critical Warning:**
+
+When `bypassOptimisticLock: true`:
+- The operator **continuously reconciles** and reapplies configuration
+- Manual changes to target resources are **immediately overwritten**
+- The operator enters an "autopilot mode" that fights against drift
+- This mimics traditional Kubernetes operators but **removes the governance model's safety guarantees**
+
+**Production Guidance:**
+
+```yaml
+# ❌ NEVER do this in production without understanding the consequences
+spec:
+  bypassOptimisticLock: true
+  action: Apply
+
+# ✅ Instead, use the normal workflow:
+# 1. Detect drift: Plan shows Drifted phase
+# 2. Review changes: Set action=DryRun to regenerate plan
+# 3. Approve: Set action=Apply to re-execute with current state
+```
+
+**Implementation Note:**
+The bypass flag is checked in the executor before hash validation. When true, the executor skips the hash comparison and proceeds directly to applying the configuration. Additionally, the drift detector continues to reconcile aggressively rather than entering passive watch mode.
+
+#### 9. Profile Advertising Lifecycle
+
+To improve discoverability and reduce friction, the operator automatically creates `VirtPlatformConfig` objects for all advertisable profiles during startup. However, users may delete these advertised profiles (e.g., to "hide" features they don't want). The controller has logic to handle this gracefully.
+
+**Auto-Recreation Behavior:**
+
+The operator monitors for deletion events on VirtPlatformConfig resources. When a deletion is detected:
+
+1. **Check Profile Type:** Is this a profile from the registry?
+2. **Check Advertisable Flag:** Does `profile.IsAdvertisable()` return `true`?
+3. **Recreate if Advertisable:** If yes to both, recreate the VirtPlatformConfig with `action: Ignore`
+
+**Lifecycle States:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created: Operator Startup (InitializeAdvertisedProfiles)
+    Created --> Active: User sets action=DryRun/Apply
+    Active --> Deleted: User runs kubectl delete
+    Deleted --> Recreated: Operator detects deletion (next reconciliation)
+    Recreated --> Created: VirtPlatformConfig recreated with action=Ignore
+
+    note right of Recreated
+        Recreated with same metadata:
+        - action: Ignore (safe default)
+        - annotations: description, impact
+        - labels: category
+    end note
+```
+
+**Why Auto-Recreate?**
+
+1. **Discoverability:** New admins can always discover available profiles via `kubectl get virtplatformconfig`
+2. **Idempotency:** If a user accidentally deletes all profiles, they reappear on next restart
+3. **Version Tracking:** Operator upgrades that add new profiles automatically advertise them
+4. **Harmless:** Since recreated profiles have `action: Ignore`, no reconciliation occurs
+
+**User Workflow:**
+
+```bash
+# User deletes a profile they don't want to see
+$ kubectl delete virtplatformconfig virt-higher-density
+virtplatformconfig.advisor.kubevirt.io "virt-higher-density" deleted
+
+# Operator detects deletion and recreates it
+$ kubectl get virtplatformconfig virt-higher-density
+NAME                  ACTION   IMPACT   PHASE     AGE
+virt-higher-density   Ignore   High     Ignored   2s
+```
+
+**Alternative: Hiding Without Deletion**
+
+Users who want to "hide" a profile don't need to delete it. They can simply leave it with `action: Ignore`:
+
+```bash
+# This profile exists but doesn't reconcile
+$ kubectl get virtplatformconfig
+NAME                      ACTION   IMPACT   PHASE     AGE
+load-aware-rebalancing    DryRun   Medium   Pending   10m
+virt-higher-density       Ignore   High     Ignored   10m  # "Hidden" but discoverable
+```
+
+**Implementation:**
+
+The controller's `Reconcile` loop handles deletion events:
+
+```go
+func (r *VirtPlatformConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) {
+    // ... existing reconciliation logic ...
+
+    if !configPlan.DeletionTimestamp.IsZero() {
+        // Object is being deleted - check if we should recreate it
+        if r.shouldRecreateAdvertisedProfile(req.Name) {
+            logger.Info("Recreating deleted advertised profile")
+            r.createAdvertisedProfile(ctx, r.Client, req.Name, logger)
+        }
+        return ctrl.Result{}, nil
+    }
+
+    // ... rest of reconciliation ...
+}
+```
+
+**Benefits:**
+- ✅ **Self-Healing:** Profiles are always discoverable even after accidental deletion
+- ✅ **Zero User Action:** No manual steps needed to restore advertised profiles
+- ✅ **Safe Default:** Recreated profiles use `action: Ignore` (no side effects)
+- ✅ **Operator Upgrades:** New profiles from updated operators automatically appear
 
 ## Examples
 
@@ -970,6 +1230,49 @@ type HighDensityConfig struct {
 
 This approach follows industry standards (Istio, Knative) and provides a future-proof, scalable configuration mechanism without redundancy.
 
-## Open questions
-1. Should we implement this as an additional controller in the HCO pod? a completely independent pod executed with a different service account with fine grained RBAC?
-2. Should we use a CEL expression to bind the name of the object to the profile it intends to manage?
+## Implementation Decisions
+
+During implementation, the following design decisions were made:
+
+### 1. Deployment Architecture: Independent Operator
+
+**Decision:** Implemented as a **completely independent operator** with its own pod and service account with fine-grained RBAC.
+
+**Rationale:**
+- ✅ **Better Isolation:** Separates virt-advisor lifecycle from HCO, reducing blast radius of failures
+- ✅ **Independent Versioning:** Allows virt-advisor to evolve and release independently of HCO
+- ✅ **Fine-Grained RBAC:** Enables precise permission scoping for governance operations
+- ✅ **Clearer Separation of Concerns:** HCO manages KubeVirt components; virt-advisor governs 3rd-party integrations
+- ✅ **Optional Deployment:** Organizations can choose whether to install virt-advisor based on their needs
+
+**Trade-offs Considered:**
+- ❌ Additional pod overhead (acceptable given the benefits)
+- ❌ Separate installation step (mitigated by OLM bundling)
+
+### 2. Singleton Pattern Enforcement: CEL Validation
+
+**Decision:** Used **CEL validation at API level** to enforce the singleton pattern by binding `metadata.name` to `spec.profile`.
+
+**Implementation:**
+```go
+// +kubebuilder:validation:XValidation:rule="self.metadata.name == self.spec.profile",message="To ensure a singleton pattern, the VirtPlatformConfig name must exactly match the spec.profile."
+```
+
+**Rationale:**
+- ✅ **Declarative Enforcement:** Validation happens at API admission time, not during reconciliation
+- ✅ **Fast Failure:** Invalid configurations are rejected immediately with clear error messages
+- ✅ **Simple Implementation:** No complex controller logic for lock management or conflict resolution
+- ✅ **Race-Free:** Kubernetes API server handles concurrent creates atomically via name uniqueness
+- ✅ **Self-Documenting:** The constraint is visible in the CRD schema and validation errors
+
+**How It Works:**
+- VirtPlatformConfig named "load-aware-rebalancing" can ONLY manage profile "load-aware-rebalancing"
+- Attempting to create a second VirtPlatformConfig for the same profile fails with a name conflict error
+- The singleton pattern is enforced naturally through Kubernetes resource name uniqueness
+
+**Alternative Considered:**
+- ❌ Runtime controller-based locking with status conditions (more complex, race-prone)
+- ❌ Validating webhook (additional infrastructure, same outcome as CEL)
+
+**Outcome:**
+The CEL approach elegantly solves the singleton requirement with minimal code and maximal clarity.
