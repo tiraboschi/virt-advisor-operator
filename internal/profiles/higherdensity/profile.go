@@ -18,11 +18,14 @@ package higherdensity
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
@@ -33,6 +36,8 @@ import (
 const (
 	// ProfileNameVirtHigherDensity is the name of the virt-higher-density profile
 	ProfileNameVirtHigherDensity = "virt-higher-density"
+	// defaultMemoryToRequestRatio is the default memory overcommit percentage (50% overcommit)
+	defaultMemoryToRequestRatio = 150
 )
 
 // VirtHigherDensityProfile implements higher density configurations for virtualization workloads
@@ -84,6 +89,10 @@ func (p *VirtHigherDensityProfile) GetPrerequisites() []discovery.Prerequisite {
 			GVK:         profileutils.MachineConfigGVK,
 			Description: "MachineConfig CRD is required for swap configuration (available on OpenShift)",
 		},
+		{
+			GVK:         profileutils.HyperConvergedGVK,
+			Description: "Install OpenShift Virtualization via OLM",
+		},
 	}
 }
 
@@ -91,6 +100,7 @@ func (p *VirtHigherDensityProfile) GetPrerequisites() []discovery.Prerequisite {
 func (p *VirtHigherDensityProfile) GetManagedResourceTypes() []schema.GroupVersionKind {
 	return []schema.GroupVersionKind{
 		profileutils.MachineConfigGVK,
+		profileutils.HyperConvergedGVK,
 	}
 }
 
@@ -115,6 +125,13 @@ func (p *VirtHigherDensityProfile) GeneratePlanItems(ctx context.Context, c clie
 		}
 		items = append(items, item)
 	}
+
+	// Always generate HCO configuration item for memory overcommit and KSM
+	hcoItem, err := p.generateHCOItem(ctx, c, configOverrides)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate HCO item: %w", err)
+	}
+	items = append(items, hcoItem)
 
 	return items, nil
 }
@@ -185,4 +202,89 @@ func (p *VirtHigherDensityProfile) generateSwapMachineConfigItem(ctx context.Con
 		WithImpact(advisorv1alpha1.ImpactHigh).
 		WithMessage(fmt.Sprintf("MachineConfig '%s' will be configured to enable kubelet swap", mcName)).
 		Build()
+}
+
+// generateHCOItem creates a plan item for HyperConverged configuration
+func (p *VirtHigherDensityProfile) generateHCOItem(ctx context.Context, c client.Client, configOverrides map[string]string) (advisorv1alpha1.VirtPlatformConfigItem, error) {
+	logger := log.FromContext(ctx)
+
+	// Create desired HCO state
+	desired := plan.CreateUnstructured(profileutils.HyperConvergedGVK, profileutils.HyperConvergedName, profileutils.HyperConvergedNamespace)
+
+	spec := make(map[string]interface{})
+	managedFields := []string{}
+	message := ""
+
+	// Get memory overcommit ratio from config (default: 150)
+	memoryRatio := int32(profileutils.GetIntConfig(configOverrides, "memoryToRequestRatio", defaultMemoryToRequestRatio))
+
+	// Configure memory overcommit
+	spec["higherWorkloadDensity"] = map[string]interface{}{
+		"memoryOvercommitPercentage": int64(memoryRatio),
+	}
+	managedFields = append(managedFields, "spec.higherWorkloadDensity.memoryOvercommitPercentage")
+	message = fmt.Sprintf("HyperConverged '%s' will be configured with memoryOvercommitPercentage=%d", profileutils.HyperConvergedName, memoryRatio)
+
+	// Configure KSM if enabled (default: true)
+	ksmEnabled := profileutils.GetBoolConfig(configOverrides, "ksmEnabled", true)
+	if ksmEnabled {
+		ksmConfig := make(map[string]interface{})
+
+		// Parse node selector if provided
+		if selectorJSON, ok := configOverrides["ksmNodeLabelSelector"]; ok && selectorJSON != "" {
+			var selector metav1.LabelSelector
+			if err := json.Unmarshal([]byte(selectorJSON), &selector); err != nil {
+				logger.V(1).Info("Failed to parse KSM selector, using default (all nodes)", "error", err)
+				ksmConfig["nodeLabelSelector"] = map[string]interface{}{}
+			} else {
+				ksmConfig["nodeLabelSelector"] = profileutils.LabelSelectorToMap(&selector)
+			}
+		} else {
+			// Empty selector = all nodes
+			ksmConfig["nodeLabelSelector"] = map[string]interface{}{}
+		}
+
+		// Set KSM configuration under spec
+		spec["ksmConfiguration"] = ksmConfig
+		managedFields = append(managedFields, "spec.ksmConfiguration")
+		message += " and KSM enabled"
+	}
+
+	// Set the spec on the desired object
+	if err := unstructured.SetNestedMap(desired.Object, spec, "spec"); err != nil {
+		return advisorv1alpha1.VirtPlatformConfigItem{}, fmt.Errorf("failed to set spec: %w", err)
+	}
+
+	// Use the builder to create the item
+	return profileutils.NewPlanItemBuilder(ctx, c, "virt-advisor-operator").
+		ForResource(desired, "configure-higher-density").
+		WithManagedFields(managedFields).
+		WithImpact(advisorv1alpha1.ImpactMedium).
+		WithMessage(message).
+		Build()
+}
+
+// GetHCOConfigForTesting extracts the current HCO configuration.
+// This method is exported for use by the controller for drift detection.
+// Returns (ksmEnabled bool, memoryPct int32, err error).
+func (p *VirtHigherDensityProfile) GetHCOConfigForTesting(ctx context.Context, c client.Client) (bool, int32, error) {
+	logger := log.FromContext(ctx)
+
+	hco, err := profileutils.GetHCO(ctx, c)
+	if err != nil {
+		logger.V(1).Info("Could not fetch HyperConverged CR", "error", err)
+		return false, 0, err
+	}
+
+	// Check if KSM is enabled (spec.ksmConfiguration exists)
+	ksmConfig, found, err := unstructured.NestedMap(hco.Object, "spec", "ksmConfiguration")
+	ksmEnabled := found && err == nil && ksmConfig != nil
+
+	// Extract memory overcommit percentage
+	memoryPct, found, err := unstructured.NestedInt64(hco.Object, "spec", "higherWorkloadDensity", "memoryOvercommitPercentage")
+	if err != nil || !found {
+		return ksmEnabled, 0, fmt.Errorf("memoryOvercommitPercentage not found in HCO CR")
+	}
+
+	return ksmEnabled, int32(memoryPct), nil
 }

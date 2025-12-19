@@ -358,7 +358,7 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 		})
 	})
 
-	Context("hcoMigrationConfigPredicate", func() {
+	Context("hcoConfigPredicate", func() {
 		var (
 			reconciler *VirtPlatformConfigReconciler
 		)
@@ -371,7 +371,7 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 		})
 
 		It("should trigger on HCO creation", func() {
-			predicate := reconciler.hcoMigrationConfigPredicate()
+			predicate := reconciler.hcoConfigPredicate()
 
 			hco := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -395,7 +395,7 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 		})
 
 		It("should trigger when spec.liveMigrationConfig changes", func() {
-			predicate := reconciler.hcoMigrationConfigPredicate()
+			predicate := reconciler.hcoConfigPredicate()
 
 			oldHCO := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -439,7 +439,7 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 		})
 
 		It("should not trigger when spec.liveMigrationConfig unchanged", func() {
-			predicate := reconciler.hcoMigrationConfigPredicate()
+			predicate := reconciler.hcoConfigPredicate()
 
 			oldHCO := &unstructured.Unstructured{
 				Object: map[string]interface{}{
@@ -501,7 +501,7 @@ var _ = Describe("VirtPlatformConfig Dynamic Watch Functions", func() {
 		})
 
 		It("should not trigger on HCO deletion", func() {
-			predicate := reconciler.hcoMigrationConfigPredicate()
+			predicate := reconciler.hcoConfigPredicate()
 
 			hco := &unstructured.Unstructured{
 				Object: map[string]interface{}{

@@ -25,12 +25,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/yaml"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
@@ -62,6 +66,14 @@ var _ = BeforeSuite(func() {
 	err = advisorv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	// Register core v1 scheme for Namespace operations
+	err = corev1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	// Register apiextensions scheme for CRD operations
+	err = apiextensionsv1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// +kubebuilder:scaffold:scheme
 
 	By("bootstrapping test environment")
@@ -83,6 +95,25 @@ var _ = BeforeSuite(func() {
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
+
+	By("creating openshift-cnv namespace for HyperConverged CR")
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "openshift-cnv",
+		},
+	}
+	err = k8sClient.Create(ctx, ns)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("loading HyperConverged CRD from file")
+	hcoCRD := loadHyperConvergedCRDFromFile()
+	err = k8sClient.Create(ctx, hcoCRD)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("loading MachineConfig CRD from file")
+	mcCRD := loadMachineConfigCRDFromFile()
+	err = k8sClient.Create(ctx, mcCRD)
+	Expect(err).NotTo(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {
@@ -113,4 +144,30 @@ func getFirstFoundEnvTestBinaryDir() string {
 		}
 	}
 	return ""
+}
+
+// loadHyperConvergedCRDFromFile loads the HyperConverged CRD from the mocks directory
+func loadHyperConvergedCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "hyperconverged_crd.yaml")
+	crdBytes, err := os.ReadFile(crdPath)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read HyperConverged CRD file")
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	err = yaml.Unmarshal(crdBytes, &crd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal HyperConverged CRD")
+
+	return &crd
+}
+
+// loadMachineConfigCRDFromFile loads the MachineConfig CRD from the mocks directory
+func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "machineconfig_crd.yaml")
+	crdBytes, err := os.ReadFile(crdPath)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read MachineConfig CRD file")
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	err = yaml.Unmarshal(crdBytes, &crd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfig CRD")
+
+	return &crd
 }

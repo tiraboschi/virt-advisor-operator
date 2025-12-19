@@ -21,10 +21,90 @@ spec:
   options:
     virtHigherDensity:
       # Enable swap on worker nodes (default: true)
-      # Set to false to disable swap (will remove MachineConfig if previously applied)
+      # Deploys MachineConfig that provisions swap from a partition labeled CNV_SWAP
+      # and configures kubelet to use LimitedSwap behavior
       enableSwap: true
+
+      # KSM (Kernel Samepage Merging) configuration
+      # When omitted (default), KSM is enabled on all nodes
+      # To opt-out of KSM, set enabled: false
+      ksmConfiguration:
+        # enabled: true  # Optional, defaults to true when ksmConfiguration is present
+        # nodeLabelSelector specifies which nodes should have KSM enabled
+        # Empty selector means all nodes (default)
+        nodeLabelSelector:
+          matchLabels:
+            ksm-enabled: "true"
+          # Or use matchExpressions for more complex selectors:
+          # matchExpressions:
+          #   - key: node-role.kubernetes.io/worker
+          #     operator: Exists
+
+      # Memory overcommit ratio (default: 150)
+      # This value is written to HyperConverged.spec.higherWorkloadDensity.memoryOvercommitPercentage
+      # A value of 150 means VMs will see 50% more memory than their pod's memory request
+      # Values > 120 require enableSwap=true (enforced by CEL validation)
+      # Valid range: 100-300
+      memoryToRequestRatio: 150
 
   # Optional: Maximum time to wait for rollout to complete
   # For large clusters with many VMs, this can take hours or days
   # Recommendation: Do not set or set very high for production
   # waitTimeout: 24h
+---
+# Example 2: Higher density without KSM
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: Apply
+
+  options:
+    virtHigherDensity:
+      # Enable swap
+      enableSwap: true
+
+      # Explicitly disable KSM by setting enabled: false
+      ksmConfiguration:
+        enabled: false
+
+      # Memory overcommit ratio - 120% (requires swap enabled)
+      # This is the maximum safe value without swap
+      memoryToRequestRatio: 120
+---
+# Example 3: Maximum density with all features
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: Apply
+
+  options:
+    virtHigherDensity:
+      # Enable swap for high overcommit ratios
+      enableSwap: true
+
+      # KSM enabled on all nodes (using default empty selector)
+      ksmConfiguration:
+        nodeLabelSelector: {}  # Empty selector = all nodes
+
+      # High memory overcommit (200% = VM sees 2x pod memory request)
+      # Requires enableSwap=true
+      memoryToRequestRatio: 200
+---
+# Example 4: Minimal configuration (all defaults)
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  # No options specified - uses defaults:
+  # - enableSwap: true
+  # - ksmConfiguration: enabled on all nodes
+  # - memoryToRequestRatio: 150

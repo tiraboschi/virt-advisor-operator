@@ -174,7 +174,24 @@ type LoadAwareConfig struct {
 	EvictionLimitNode *int32 `json:"evictionLimitNode,omitempty"`
 }
 
+// KSMConfiguration controls Kernel Same-page Merging settings.
+type KSMConfiguration struct {
+	// Enabled controls whether KSM is configured via HyperConverged CR.
+	// When true (default), KSM is enabled on nodes matching nodeLabelSelector.
+	// When false, KSM configuration is not written to HCO (opt-out).
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// NodeLabelSelector specifies which nodes should have KSM enabled.
+	// Empty selector means all nodes (default when enabled=true).
+	// Ignored when enabled=false.
+	// +optional
+	NodeLabelSelector *metav1.LabelSelector `json:"nodeLabelSelector,omitempty"`
+}
+
 // VirtHigherDensityConfig contains typed configuration for the virt-higher-density profile.
+// +kubebuilder:validation:XValidation:rule="!has(self.memoryToRequestRatio) || self.memoryToRequestRatio <= 120 || (has(self.enableSwap) && self.enableSwap == true)",message="memoryToRequestRatio > 120 requires enableSwap=true"
 type VirtHigherDensityConfig struct {
 	// EnableSwap controls whether to enable swap on worker nodes for higher VM density.
 	// When enabled, deploys a MachineConfig that provisions swap from a partition labeled CNV_SWAP
@@ -182,6 +199,22 @@ type VirtHigherDensityConfig struct {
 	// +kubebuilder:default=true
 	// +optional
 	EnableSwap *bool `json:"enableSwap,omitempty"`
+
+	// KSMConfiguration enables and configures Kernel Same-page Merging on nodes.
+	// When omitted (nil), defaults to enabled=true with empty nodeLabelSelector (all nodes).
+	// Set enabled=false to opt-out of KSM configuration.
+	// +optional
+	KSMConfiguration *KSMConfiguration `json:"ksmConfiguration,omitempty"`
+
+	// MemoryToRequestRatio controls the memory overcommit percentage for VMs.
+	// This value is written to HyperConverged.spec.higherWorkloadDensity.memoryOvercommitPercentage.
+	// A value of 150 means VMs will see 50% more memory than their pod's memory request.
+	// Values > 120 require enableSwap=true (enforced by CEL validation).
+	// +kubebuilder:default=150
+	// +kubebuilder:validation:Minimum=100
+	// +kubebuilder:validation:Maximum=300
+	// +optional
+	MemoryToRequestRatio *int32 `json:"memoryToRequestRatio,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Pending;Drafting;PrerequisiteFailed;ReviewRequired;InProgress;Completed;CompletedWithErrors;CompletedWithUpgrade;Failed;Drifted;Ignored

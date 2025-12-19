@@ -517,6 +517,96 @@ This design ensures:
 - ✅ **Cross-platform support**: Works on vanilla Kubernetes (without OpenShift CRDs)
 - ✅ **Clear feedback**: Logs show which watches were skipped and why
 
+### Advanced: Profiles That Depend on HyperConverged (HCO) Configuration
+
+If your profile needs to read values from the **HyperConverged (HCO) CR** in OpenShift Virtualization, the controller already has infrastructure to automatically trigger drift detection when HCO changes. You just need to integrate your profile with the existing mechanism.
+
+**Examples of HCO-dependent profiles:**
+- **LoadAwareRebalancing**: Reads `spec.liveMigrationConfig` to derive eviction limits
+- **VirtHigherDensity**: Reads `spec.higherWorkloadDensity.memoryOvercommitPercentage` and `spec.configuration.ksmConfiguration`
+
+#### What You Need to Do as a Profile Author
+
+**1. Update the HCO predicate in the controller** (`internal/controller/virtplatformconfig_controller.go:2228-2249`)
+
+Add a check for your HCO field in the `hcoConfigPredicate()` function:
+
+```go
+func (r *VirtPlatformConfigReconciler) hcoConfigPredicate() predicate.Predicate {
+    return predicate.Funcs{
+        UpdateFunc: func(e event.UpdateEvent) bool {
+            oldObj := e.ObjectOld.(*unstructured.Unstructured)
+            newObj := e.ObjectNew.(*unstructured.Unstructured)
+
+            // ... existing checks ...
+
+            // Add your field check here
+            oldYourField, _, _ := unstructured.NestedInt64(oldObj.Object, "spec", "yourSection", "yourField")
+            newYourField, _, _ := unstructured.NestedInt64(newObj.Object, "spec", "yourSection", "yourField")
+            if oldYourField != newYourField {
+                return true
+            }
+
+            return false
+        },
+    }
+}
+```
+
+**2. Update the event handler** (`internal/controller/virtplatformconfig_controller.go:2260-2326`)
+
+Add your profile to `enqueueHCODependentConfigs()` so it gets reconciled when HCO changes:
+
+```go
+// Check if this config uses your profile
+if config.Spec.Profile == "your-profile-name" {
+    // Only enqueue if user hasn't provided explicit overrides
+    if !hasExplicitYourProfileOptions(&config) {
+        requests = append(requests, reconcile.Request{
+            NamespacedName: types.NamespacedName{
+                Name: config.Name,
+            },
+        })
+    }
+}
+```
+
+**3. Implement drift detection method in the controller**
+
+Add a drift detection method similar to `hcoInputDependenciesChanged()` (line 1562) or `hcoHigherDensityConfigChanged()` (line 1665):
+
+```go
+func (r *VirtPlatformConfigReconciler) hcoYourProfileConfigChanged(ctx context.Context, config *advisorv1alpha1.VirtPlatformConfig) (bool, string) {
+    if config.Spec.Profile != "your-profile-name" {
+        return false, ""
+    }
+
+    if hasExplicitYourProfileOptions(config) {
+        return false, "" // User override takes precedence
+    }
+
+    // Read current HCO value
+    currentValue := // ... read from HCO CR using profileutils.GetHCO() ...
+
+    // Read applied value from config.Status.Items
+    appliedValue := // ... extract from applied plan items ...
+
+    if currentValue != appliedValue {
+        return true, fmt.Sprintf("HCO field changed: %v -> %v", appliedValue, currentValue)
+    }
+
+    return false, ""
+}
+```
+
+**4. Call your drift detection in the reconciliation loop** (~line 400)
+
+Add your drift check after the existing HCO drift checks.
+
+**Reference implementations:**
+- `hcoInputDependenciesChanged()` (line 1562): LoadAware profile pattern
+- `hcoHigherDensityConfigChanged()` (line 1665): VirtHigherDensity profile pattern
+
 ### Validate(configOverrides map[string]string) error
 Validates that the provided configuration overrides are valid for this profile. Returns an error if any override is unsupported or invalid.
 

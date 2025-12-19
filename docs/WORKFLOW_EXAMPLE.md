@@ -1313,3 +1313,156 @@ This workflow demonstrated:
 - Try the `virt-higher-density` profile
 - Review operator logs for detailed reconciliation traces
 - Monitor load-aware descheduling in action via descheduler logs
+
+---
+
+## Appendix: VirtHigherDensity Profile Example
+
+The `virt-higher-density` profile optimizes the cluster for higher VM density by enabling swap and configuring HyperConverged (HCO) memory overcommit settings. Here's a real example showing the generated plan:
+
+```bash
+$ oc get virtplatformconfigs virt-higher-density -o yaml
+```
+
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  annotations:
+    advisor.kubevirt.io/auto-created: "true"
+    advisor.kubevirt.io/description: Enables higher VM density through swap and other
+      optimizations
+    advisor.kubevirt.io/impact-summary: Enables swap for kubelet to allow memory overcommit
+      and higher VM density. Requires nodes with swap partition labeled CNV_SWAP.
+  creationTimestamp: "2025-12-19T15:05:10Z"
+  generation: 4
+  labels:
+    advisor.kubevirt.io/category: density
+  name: virt-higher-density
+  resourceVersion: "115519"
+  uid: 14f1838b-7df4-47a3-8bf9-85b41b4731f5
+spec:
+  action: DryRun
+  profile: virt-higher-density
+status:
+  conditions:
+  - lastTransitionTime: "2025-12-19T17:01:21Z"
+    message: Plan ready for review. Change action to 'Apply' to execute.
+    reason: ReviewRequired
+    status: "True"
+    type: ReviewRequired
+  - lastTransitionTime: "2025-12-19T17:01:21Z"
+    message: Configuration is in sync with desired state
+    reason: NoDrift
+    status: "False"
+    type: Drifted
+  impactSeverity: High
+  phase: ReviewRequired
+  items:
+  - name: enable-kubelet-swap
+    state: Pending
+    impactSeverity: High
+    message: MachineConfig '90-worker-kubelet-swap' will be configured to enable kubelet swap
+    targetRef:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfig
+      name: 90-worker-kubelet-swap
+    managedFields:
+    - spec.config
+    desiredState:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfig
+      metadata:
+        labels:
+          machineconfiguration.openshift.io/role: worker
+        name: 90-worker-kubelet-swap
+      spec:
+        config:
+          ignition:
+            version: 3.2.0
+          storage:
+            files:
+            - contents:
+                source: data:text/plain;charset=utf-8;base64,IyEvdXNyL2Jpbi9lbnYgYmFzaApzZXQgLWV1byBwaXBlZmFpbAoKUEFSVExBQkVMPSJDTlZfU1dBUCIKREVWSUNFPSIvZGV2L2Rpc2svYnktcGFydGxhYmVsLyR7UEFSVExBQkVMfSIKCmlmIFtbICEgLWUgIiRERVZJQ0UiIF1dOyB0aGVuCiAgZWNobyAiU3dhcCBwYXJ0aXRpb24gd2l0aCBQQVJUTEFCRUw9JHtQQVJUTEFCRUx9IG5vdCBmb3VuZCIgPiYyCiAgZXhpdCAxCmZpCgppZiBzd2Fwb24gLS1zaG93PU5BTUUgfCBncmVwIC1xICIkREVWSUNFIjsgdGhlbgogIGVjaG8gIlN3YXAgYWxyZWFkeSBlbmFibGVkIG9uICRERVZJQ0UiID4mMgogIGV4aXQgMQpmaQoKZWNobyAiRW5hYmxpbmcgc3dhcCBvbiAkREVWSUNFIiA+JjIKc3dhcG9uICIkREVWSUNFIgp0b3VjaCAvdmFyL3RtcC9zd2FwZmlsZQ==
+              mode: 493
+              overwrite: true
+              path: /etc/find-swap-partition
+            - contents:
+                source: data:text/plain;charset=utf-8;base64,YXBpVmVyc2lvbjoga3ViZWxldC5jb25maWcuazhzLmlvL3YxYmV0YTEKa2luZDogS3ViZWxldENvbmZpZ3VyYXRpb24KbWVtb3J5U3dhcDoKICBzd2FwQmVoYXZpb3I6IExpbWl0ZWRTd2FwCg==
+              mode: 420
+              overwrite: true
+              path: /etc/openshift/kubelet.conf.d/90-swap.conf
+          systemd:
+            units:
+            - contents: |
+                [Unit]
+                Description=Provision and enable swap
+                ...
+              enabled: true
+              name: swap-provision.service
+    diff: |
+      --- /dev/null
+      +++ 90-worker-kubelet-swap (MachineConfig)
+      @@ -0,0 +1,53 @@
+      +apiVersion: machineconfiguration.openshift.io/v1
+      +kind: MachineConfig
+      ...
+
+  - name: configure-higher-density
+    state: Pending
+    impactSeverity: Medium
+    message: HyperConverged 'kubevirt-hyperconverged' will be configured with memoryOvercommitPercentage=150 and KSM enabled
+    targetRef:
+      apiVersion: hco.kubevirt.io/v1beta1
+      kind: HyperConverged
+      name: kubevirt-hyperconverged
+      namespace: openshift-cnv
+    managedFields:
+    - spec.higherWorkloadDensity.memoryOvercommitPercentage
+    - spec.ksmConfiguration
+    desiredState:
+      apiVersion: hco.kubevirt.io/v1beta1
+      kind: HyperConverged
+      metadata:
+        name: kubevirt-hyperconverged
+        namespace: openshift-cnv
+      spec:
+        higherWorkloadDensity:
+          memoryOvercommitPercentage: 150
+        ksmConfiguration:
+          nodeLabelSelector: {}
+    diff: |
+      --- kubevirt-hyperconverged (HyperConverged)
+      +++ kubevirt-hyperconverged (HyperConverged)
+      @@ -34,8 +34,10 @@
+           enableMultiArchBootImageImport: false
+           persistentReservation: false
+         higherWorkloadDensity:
+      -    memoryOvercommitPercentage: 100
+      +    memoryOvercommitPercentage: 150
+         infra: {}
+      +  ksmConfiguration:
+      +    nodeLabelSelector: {}
+         liveMigrationConfig:
+           allowAutoConverge: false
+
+  observedGeneration: 4
+  operatorVersion: v0.1.31
+  sourceSnapshotHash: 3bfa730d47b28869339b5450c6134d213df022650d29d3f12dfa834be832fc2f
+```
+
+**Key Differences from LoadAware Profile:**
+
+**Item 1: Kubelet Swap Configuration**
+- Creates MachineConfig to enable kubelet swap with `LimitedSwap` behavior
+- Provisions swap from partition labeled `CNV_SWAP`
+- Restricts swap to system.slice to protect system processes
+- Requires node reboots (High impact)
+
+**Item 2: HyperConverged Configuration**
+- Configures `memoryOvercommitPercentage: 150` (50% overcommit)
+- Enables KSM (Kernel Samepage Merging) on all nodes via empty selector
+- Managed fields track HCO drift for automatic convergence
+
+**HCO Integration:**
+Like `load-aware-rebalancing`, this profile reads from and writes to the HyperConverged CR. If HCO memory settings are changed externally, drift detection triggers automatic plan regeneration with forced user review.

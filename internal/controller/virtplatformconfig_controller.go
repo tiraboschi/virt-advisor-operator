@@ -43,6 +43,7 @@ import (
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/higherdensity"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
 )
 
@@ -124,7 +125,7 @@ type VirtPlatformConfigReconciler struct {
 // +kubebuilder:rbac:groups=operator.openshift.io,resources=kubedeschedulers,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=machineconfiguration.openshift.io,resources=machineconfigs,verbs=get;list;watch;create;delete;patch
 // +kubebuilder:rbac:groups=machineconfiguration.openshift.io,resources=machineconfigpools,verbs=get;list;watch
-// +kubebuilder:rbac:groups=hco.kubevirt.io,resources=hyperconvergeds,verbs=get;list;watch
+// +kubebuilder:rbac:groups=hco.kubevirt.io,resources=hyperconvergeds,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -554,6 +555,10 @@ func (r *VirtPlatformConfigReconciler) handleReviewRequiredPhase(ctx context.Con
 		if deschedulerItem != nil {
 			// Check if HCO dependencies have changed again (could have been reverted)
 			changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan)
+			if !changed {
+				// Also check virt-higher-density profile
+				changed, reason = r.hcoHigherDensityConfigChanged(ctx, configPlan)
+			}
 
 			if !changed {
 				// HCO is now back in sync with what's applied - drift resolved
@@ -973,8 +978,13 @@ func (r *VirtPlatformConfigReconciler) handleCompletedPhase(ctx context.Context,
 		}
 	}
 
-	// Check if HCO-derived input dependencies have changed (for load-aware profile)
-	if changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan); changed {
+	// Check if HCO-derived input dependencies have changed
+	changed, reason := r.hcoInputDependenciesChanged(ctx, configPlan)
+	if !changed {
+		// Also check virt-higher-density profile HCO dependencies
+		changed, reason = r.hcoHigherDensityConfigChanged(ctx, configPlan)
+	}
+	if changed {
 		logger.Info("HCO input dependencies changed, regenerating plan", "reason", reason)
 		// Set a special marker to force review after regeneration
 		r.setCondition(configPlan, "InputDependencyDrift", metav1.ConditionTrue, "InputChanged",
@@ -1636,6 +1646,122 @@ func (r *VirtPlatformConfigReconciler) hcoInputDependenciesChanged(ctx context.C
 	return false, ""
 }
 
+// hcoHigherDensityConfigChanged checks if HCO configuration relevant to virt-higher-density has drifted.
+// Returns (changed bool, reason string).
+func (r *VirtPlatformConfigReconciler) hcoHigherDensityConfigChanged(ctx context.Context, configPlan *advisorv1alpha1.VirtPlatformConfig) (bool, string) {
+	logger := log.FromContext(ctx)
+
+	// Only applies to virt-higher-density profile
+	if configPlan.Spec.Profile != "virt-higher-density" {
+		return false, ""
+	}
+
+	// Skip if user has explicit config overrides
+	hasExplicitConfig := false
+	if configPlan.Spec.Options != nil && configPlan.Spec.Options.VirtHigherDensity != nil {
+		cfg := configPlan.Spec.Options.VirtHigherDensity
+		// Check if user explicitly set KSM or memory ratio
+		if cfg.KSMConfiguration != nil || cfg.MemoryToRequestRatio != nil {
+			hasExplicitConfig = true
+		}
+	}
+	if hasExplicitConfig {
+		logger.V(1).Info("User has explicit virt-higher-density config, skipping HCO drift check")
+		return false, ""
+	}
+
+	// Get the profile to access HCO config reader
+	profile, err := profiles.DefaultRegistry.Get(configPlan.Spec.Profile)
+	if err != nil {
+		logger.Error(err, "Failed to get virt-higher-density profile")
+		return false, ""
+	}
+
+	hdProfile, ok := profile.(*higherdensity.VirtHigherDensityProfile)
+	if !ok {
+		logger.Error(fmt.Errorf("profile is not VirtHigherDensityProfile"), "Type assertion failed")
+		return false, ""
+	}
+
+	// Get current HCO configuration
+	currentKSM, currentMemory, err := hdProfile.GetHCOConfigForTesting(ctx, r.Client)
+	if err != nil {
+		logger.V(1).Info("Could not read current HCO config for drift detection", "error", err)
+		return false, ""
+	}
+
+	// Find the HCO item in the applied plan
+	hcoItem := r.findHCOItem(configPlan)
+	if hcoItem == nil {
+		logger.V(1).Info("No HCO item found in plan, cannot detect drift")
+		return false, ""
+	}
+
+	// Extract what was applied
+	appliedKSM, appliedMemory, err := r.extractAppliedHCOConfig(ctx, hcoItem)
+	if err != nil {
+		logger.V(1).Info("Could not extract applied HCO config", "error", err)
+		return false, ""
+	}
+
+	// Compare KSM configuration
+	if currentKSM != appliedKSM {
+		return true, fmt.Sprintf("HCO KSM configuration changed (was %v, now %v)", appliedKSM, currentKSM)
+	}
+
+	// Compare memory overcommit percentage
+	if currentMemory != appliedMemory {
+		return true, fmt.Sprintf("HCO memoryOvercommitPercentage changed (%d -> %d)", appliedMemory, currentMemory)
+	}
+
+	return false, ""
+}
+
+// findHCOItem finds the HyperConverged item in the plan
+func (r *VirtPlatformConfigReconciler) findHCOItem(configPlan *advisorv1alpha1.VirtPlatformConfig) *advisorv1alpha1.VirtPlatformConfigItem {
+	for i := range configPlan.Status.Items {
+		item := &configPlan.Status.Items[i]
+		if item.TargetRef.Kind == "HyperConverged" {
+			return item
+		}
+	}
+	return nil
+}
+
+// extractAppliedHCOConfig reads the currently applied HCO CR and extracts KSM and memory config.
+// Returns (ksmEnabled bool, memoryPct int32, err error).
+func (r *VirtPlatformConfigReconciler) extractAppliedHCOConfig(ctx context.Context, item *advisorv1alpha1.VirtPlatformConfigItem) (bool, int32, error) {
+	hco := &unstructured.Unstructured{}
+	hco.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "hco.kubevirt.io",
+		Version: "v1beta1",
+		Kind:    "HyperConverged",
+	})
+
+	key := types.NamespacedName{
+		Name:      item.TargetRef.Name,
+		Namespace: item.TargetRef.Namespace,
+	}
+
+	if err := r.Get(ctx, key, hco); err != nil {
+		return false, 0, fmt.Errorf("failed to get HCO CR: %w", err)
+	}
+
+	// Check if KSM is configured
+	_, ksmFound, err := unstructured.NestedMap(hco.Object, "spec", "ksmConfiguration")
+	if err != nil {
+		return false, 0, fmt.Errorf("error reading ksmConfiguration: %w", err)
+	}
+
+	// Extract memory overcommit percentage
+	memoryPct, found, err := unstructured.NestedInt64(hco.Object, "spec", "higherWorkloadDensity", "memoryOvercommitPercentage")
+	if err != nil || !found {
+		return false, 0, fmt.Errorf("memoryOvercommitPercentage not found: %w", err)
+	}
+
+	return ksmFound, int32(memoryPct), nil
+}
+
 // findDeschedulerItem finds the KubeDescheduler item in the plan
 func (r *VirtPlatformConfigReconciler) findDeschedulerItem(configPlan *advisorv1alpha1.VirtPlatformConfig) *advisorv1alpha1.VirtPlatformConfigItem {
 	for i := range configPlan.Status.Items {
@@ -2069,12 +2195,13 @@ func (r *VirtPlatformConfigReconciler) enqueueMachineConfigPoolOwners() handler.
 	})
 }
 
-// hcoMigrationConfigPredicate returns a predicate that only triggers on HCO spec.liveMigrationConfig changes.
+// hcoConfigPredicate returns a predicate that triggers on HCO configuration changes.
+// Watches: liveMigrationConfig, higherWorkloadDensity, ksmConfiguration.
 // This filters out status updates and other spec changes to minimize reconciliation noise.
-func (r *VirtPlatformConfigReconciler) hcoMigrationConfigPredicate() predicate.Predicate {
+func (r *VirtPlatformConfigReconciler) hcoConfigPredicate() predicate.Predicate {
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
-			// New HCO CR - always trigger to pick up initial limits
+			// New HCO CR - always trigger to pick up initial config
 			return true
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
@@ -2087,15 +2214,36 @@ func (r *VirtPlatformConfigReconciler) hcoMigrationConfigPredicate() predicate.P
 				return false
 			}
 
-			// Only trigger if spec.liveMigrationConfig changed
-			oldConfig, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "liveMigrationConfig")
-			newConfig, _, _ := unstructured.NestedMap(newObj.Object, "spec", "liveMigrationConfig")
+			configChanged := false
 
-			// Use JSON comparison for deep equality
-			oldJSON, _ := json.Marshal(oldConfig)
-			newJSON, _ := json.Marshal(newConfig)
+			// Check liveMigrationConfig (load-aware-rebalancing profile)
+			oldMig, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "liveMigrationConfig")
+			newMig, _, _ := unstructured.NestedMap(newObj.Object, "spec", "liveMigrationConfig")
+			oldMigJSON, _ := json.Marshal(oldMig)
+			newMigJSON, _ := json.Marshal(newMig)
+			if string(oldMigJSON) != string(newMigJSON) {
+				configChanged = true
+			}
 
-			return string(oldJSON) != string(newJSON)
+			// Check higherWorkloadDensity (virt-higher-density profile)
+			oldDens, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "higherWorkloadDensity")
+			newDens, _, _ := unstructured.NestedMap(newObj.Object, "spec", "higherWorkloadDensity")
+			oldDensJSON, _ := json.Marshal(oldDens)
+			newDensJSON, _ := json.Marshal(newDens)
+			if string(oldDensJSON) != string(newDensJSON) {
+				configChanged = true
+			}
+
+			// Check ksmConfiguration (virt-higher-density profile)
+			oldKSM, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "ksmConfiguration")
+			newKSM, _, _ := unstructured.NestedMap(newObj.Object, "spec", "ksmConfiguration")
+			oldKSMJSON, _ := json.Marshal(oldKSM)
+			newKSMJSON, _ := json.Marshal(newKSM)
+			if string(oldKSMJSON) != string(newKSMJSON) {
+				configChanged = true
+			}
+
+			return configChanged
 		},
 		DeleteFunc: func(e event.DeleteEvent) bool {
 			// HCO deleted - don't trigger (profiles will fail prerequisite checks anyway)
@@ -2108,12 +2256,14 @@ func (r *VirtPlatformConfigReconciler) hcoMigrationConfigPredicate() predicate.P
 }
 
 // enqueueHCODependentConfigs returns an event handler that enqueues VirtPlatformConfigs
-// that depend on HCO migration limits for eviction tuning.
+// that depend on HCO configuration (migration limits, memory overcommit, KSM).
+//
+//nolint:gocognit // Complex logic required to determine which configs depend on HCO
 func (r *VirtPlatformConfigReconciler) enqueueHCODependentConfigs() handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 		logger := log.FromContext(ctx)
 
-		logger.V(1).Info("HyperConverged migration config changed, finding dependent VirtPlatformConfigs")
+		logger.V(1).Info("HyperConverged config changed, finding dependent VirtPlatformConfigs")
 
 		// List all VirtPlatformConfigs
 		configList := &advisorv1alpha1.VirtPlatformConfigList{}
@@ -2124,13 +2274,10 @@ func (r *VirtPlatformConfigReconciler) enqueueHCODependentConfigs() handler.Even
 
 		var requests []reconcile.Request
 		for _, config := range configList.Items {
-			// Only care about load-aware-rebalancing profile
-			if config.Spec.Profile != "load-aware-rebalancing" {
-				continue
-			}
+			shouldEnqueue := false
 
 			// Only care about configs in active management or waiting for review
-			// Skip Pending, Drafting, Failed, etc. - they'll pick up new limits on next plan generation
+			// Skip Pending, Drafting, Failed, etc. - they'll pick up new config on next plan generation
 			// Include ReviewRequired to enable drift auto-resolution when HCO changes back
 			if config.Status.Phase != advisorv1alpha1.PlanPhaseCompleted &&
 				config.Status.Phase != advisorv1alpha1.PlanPhaseCompletedWithErrors &&
@@ -2138,33 +2285,49 @@ func (r *VirtPlatformConfigReconciler) enqueueHCODependentConfigs() handler.Even
 				continue
 			}
 
-			// Check if user provided explicit eviction limits
-			// If they did, they don't rely on HCO defaults, so HCO changes don't matter
-			hasExplicitLimits := false
-			if config.Spec.Options != nil && config.Spec.Options.LoadAware != nil {
-				if config.Spec.Options.LoadAware.EvictionLimitTotal != nil ||
-					config.Spec.Options.LoadAware.EvictionLimitNode != nil {
-					hasExplicitLimits = true
+			// Handle load-aware-rebalancing profile
+			if config.Spec.Profile == "load-aware-rebalancing" {
+				hasExplicitLimits := false
+				if config.Spec.Options != nil && config.Spec.Options.LoadAware != nil {
+					if config.Spec.Options.LoadAware.EvictionLimitTotal != nil ||
+						config.Spec.Options.LoadAware.EvictionLimitNode != nil {
+						hasExplicitLimits = true
+					}
+				}
+				if !hasExplicitLimits {
+					shouldEnqueue = true
+					logger.V(1).Info("Enqueuing load-aware profile (relies on HCO eviction limits)",
+						"virtplatformconfig", config.Name)
 				}
 			}
 
-			if hasExplicitLimits {
-				logger.V(1).Info("Skipping VirtPlatformConfig with explicit eviction limits",
-					"virtplatformconfig", config.Name,
-					"reason", "User-provided limits override HCO defaults")
-				continue
+			// Handle virt-higher-density profile
+			if config.Spec.Profile == "virt-higher-density" {
+				hasExplicitConfig := false
+				if config.Spec.Options != nil && config.Spec.Options.VirtHigherDensity != nil {
+					cfg := config.Spec.Options.VirtHigherDensity
+					if cfg.KSMConfiguration != nil || cfg.MemoryToRequestRatio != nil {
+						hasExplicitConfig = true
+					}
+				}
+				if !hasExplicitConfig {
+					shouldEnqueue = true
+					logger.V(1).Info("Enqueuing virt-higher-density profile (relies on HCO defaults)",
+						"virtplatformconfig", config.Name)
+				}
 			}
 
-			// This config relies on HCO defaults - enqueue for regeneration
-			logger.Info("Enqueuing VirtPlatformConfig due to HyperConverged migration config change",
-				"virtplatformconfig", config.Name,
-				"reason", "Config relies on HCO default eviction limits")
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{
-					Name: config.Name,
-					// VirtPlatformConfig is cluster-scoped
-				},
-			})
+			if shouldEnqueue {
+				logger.Info("Enqueuing VirtPlatformConfig due to HyperConverged config change",
+					"virtplatformconfig", config.Name,
+					"profile", config.Spec.Profile)
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name: config.Name,
+						// VirtPlatformConfig is cluster-scoped
+					},
+				})
+			}
 		}
 
 		return requests
@@ -2298,7 +2461,7 @@ func (r *VirtPlatformConfigReconciler) SetupWithManager(mgr ctrl.Manager) error 
 		controllerBuilder = controllerBuilder.Watches(
 			hcoResource,
 			r.enqueueHCODependentConfigs(),
-			builder.WithPredicates(r.hcoMigrationConfigPredicate()),
+			builder.WithPredicates(r.hcoConfigPredicate()),
 		)
 	} else {
 		logger.Info("HyperConverged CRD not available, skipping input dependency watch",

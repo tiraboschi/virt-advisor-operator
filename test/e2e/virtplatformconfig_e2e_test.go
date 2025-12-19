@@ -1429,7 +1429,7 @@ spec:
 		})
 
 		It("should accept enableSwap=false", func() {
-			By("applying virt-higher-density with enableSwap=false")
+			By("applying virt-higher-density with enableSwap=false and memoryToRequestRatio=120")
 			sampleYAML := `
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
@@ -1442,6 +1442,7 @@ spec:
   options:
     virtHigherDensity:
       enableSwap: false
+      memoryToRequestRatio: 120
 `
 			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
 			cmd.Stdin = strings.NewReader(sampleYAML)

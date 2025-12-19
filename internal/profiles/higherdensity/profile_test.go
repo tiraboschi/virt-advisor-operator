@@ -87,12 +87,13 @@ func TestVirtHigherDensityProfile_GetPrerequisites(t *testing.T) {
 
 	prereqs := profile.GetPrerequisites()
 
-	// Should require MachineConfig CRD
-	if len(prereqs) == 0 {
-		t.Fatal("GetPrerequisites() returned empty list, expected MachineConfig CRD")
+	// Should require both MachineConfig and HyperConverged CRDs
+	if len(prereqs) < 2 {
+		t.Fatalf("GetPrerequisites() returned %d items, expected at least 2 (MachineConfig and HyperConverged)", len(prereqs))
 	}
 
 	foundMachineConfig := false
+	foundHyperConverged := false
 	for _, prereq := range prereqs {
 		if prereq.GVK == profileutils.MachineConfigGVK {
 			foundMachineConfig = true
@@ -103,10 +104,19 @@ func TestVirtHigherDensityProfile_GetPrerequisites(t *testing.T) {
 				t.Errorf("MachineConfig prerequisite description = %q, should mention OpenShift", prereq.Description)
 			}
 		}
+		if prereq.GVK == profileutils.HyperConvergedGVK {
+			foundHyperConverged = true
+			if prereq.Description == "" {
+				t.Error("HyperConverged prerequisite should have a description")
+			}
+		}
 	}
 
 	if !foundMachineConfig {
 		t.Error("GetPrerequisites() should include MachineConfig CRD requirement")
+	}
+	if !foundHyperConverged {
+		t.Error("GetPrerequisites() should include HyperConverged CRD requirement")
 	}
 }
 
@@ -115,20 +125,27 @@ func TestVirtHigherDensityProfile_GetManagedResourceTypes(t *testing.T) {
 
 	managedTypes := profile.GetManagedResourceTypes()
 
-	// Should manage MachineConfig
-	if len(managedTypes) == 0 {
-		t.Fatal("GetManagedResourceTypes() returned empty list, expected MachineConfig")
+	// Should manage both MachineConfig and HyperConverged
+	if len(managedTypes) < 2 {
+		t.Fatalf("GetManagedResourceTypes() returned %d items, expected at least 2 (MachineConfig and HyperConverged)", len(managedTypes))
 	}
 
 	foundMachineConfig := false
+	foundHyperConverged := false
 	for _, gvk := range managedTypes {
 		if gvk == profileutils.MachineConfigGVK {
 			foundMachineConfig = true
+		}
+		if gvk == profileutils.HyperConvergedGVK {
+			foundHyperConverged = true
 		}
 	}
 
 	if !foundMachineConfig {
 		t.Error("GetManagedResourceTypes() should include MachineConfig GVK")
+	}
+	if !foundHyperConverged {
+		t.Error("GetManagedResourceTypes() should include HyperConverged GVK for drift detection")
 	}
 }
 
@@ -179,10 +196,81 @@ func TestVirtHigherDensityProfile_Validate(t *testing.T) {
 	}
 }
 
+func TestVirtHigherDensityProfile_ConfigDefaults(t *testing.T) {
+	// Test that default values are correctly applied for HCO configuration
+	tests := []struct {
+		name            string
+		configOverrides map[string]string
+		wantKSMEnabled  bool
+		wantMemoryRatio int
+	}{
+		{
+			name:            "empty config uses defaults",
+			configOverrides: map[string]string{},
+			wantKSMEnabled:  true,
+			wantMemoryRatio: defaultMemoryToRequestRatio,
+		},
+		{
+			name: "explicit KSM enabled",
+			configOverrides: map[string]string{
+				"ksmEnabled": "true",
+			},
+			wantKSMEnabled:  true,
+			wantMemoryRatio: defaultMemoryToRequestRatio,
+		},
+		{
+			name: "explicit KSM disabled",
+			configOverrides: map[string]string{
+				"ksmEnabled": "false",
+			},
+			wantKSMEnabled:  false,
+			wantMemoryRatio: defaultMemoryToRequestRatio,
+		},
+		{
+			name: "custom memory ratio",
+			configOverrides: map[string]string{
+				"memoryToRequestRatio": "200",
+			},
+			wantKSMEnabled:  true,
+			wantMemoryRatio: 200,
+		},
+		{
+			name: "all options specified",
+			configOverrides: map[string]string{
+				"ksmEnabled":           "false",
+				"memoryToRequestRatio": "120",
+			},
+			wantKSMEnabled:  false,
+			wantMemoryRatio: 120,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Test KSM config extraction
+			ksmEnabled := profileutils.GetBoolConfig(tt.configOverrides, "ksmEnabled", true)
+			if ksmEnabled != tt.wantKSMEnabled {
+				t.Errorf("KSM enabled = %v, want %v", ksmEnabled, tt.wantKSMEnabled)
+			}
+
+			// Test memory ratio extraction
+			memoryRatio := profileutils.GetIntConfig(tt.configOverrides, "memoryToRequestRatio", defaultMemoryToRequestRatio)
+			if memoryRatio != tt.wantMemoryRatio {
+				t.Errorf("Memory ratio = %d, want %d", memoryRatio, tt.wantMemoryRatio)
+			}
+		})
+	}
+}
+
 func TestVirtHigherDensityProfile_Constants(t *testing.T) {
 	// Verify profile constants are correctly defined
 	if ProfileNameVirtHigherDensity != "virt-higher-density" {
 		t.Errorf("ProfileNameVirtHigherDensity = %q, want %q", ProfileNameVirtHigherDensity, "virt-higher-density")
+	}
+
+	// Verify default memory ratio constant
+	if defaultMemoryToRequestRatio != 150 {
+		t.Errorf("defaultMemoryToRequestRatio = %d, want 150", defaultMemoryToRequestRatio)
 	}
 }
 

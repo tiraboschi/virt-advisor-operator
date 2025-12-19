@@ -25,7 +25,9 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -68,6 +70,10 @@ var _ = BeforeSuite(func() {
 	err = advisorv1alpha1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
 
+	// Register core v1 scheme for Namespace operations
+	err = corev1.AddToScheme(scheme)
+	Expect(err).NotTo(HaveOccurred())
+
 	// Register apiextensions scheme for CRD operations
 	err = apiextensionsv1.AddToScheme(scheme)
 	Expect(err).NotTo(HaveOccurred())
@@ -76,9 +82,23 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(integrationK8sClient).NotTo(BeNil())
 
+	By("creating openshift-cnv namespace for HyperConverged CR")
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "openshift-cnv",
+		},
+	}
+	err = integrationK8sClient.Create(integrationCtx, ns)
+	Expect(err).NotTo(HaveOccurred())
+
 	By("loading MachineConfig CRD from file")
 	machineconfigCRD := loadMachineConfigCRDFromFile()
 	err = integrationK8sClient.Create(integrationCtx, machineconfigCRD)
+	Expect(err).NotTo(HaveOccurred())
+
+	By("loading HyperConverged CRD from file")
+	hcoCRD := loadHyperConvergedCRDFromFile()
+	err = integrationK8sClient.Create(integrationCtx, hcoCRD)
 	Expect(err).NotTo(HaveOccurred())
 
 	// Wait for environment to be ready
@@ -100,10 +120,10 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 	})
 
 	Describe("GeneratePlanItems with swap enabled (default)", func() {
-		It("should generate 1 plan item (MachineConfig for swap)", func() {
+		It("should generate 2 plan items (MachineConfig for swap + HCO)", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(items).To(HaveLen(1), "should generate MachineConfig for swap")
+			Expect(items).To(HaveLen(2), "should generate MachineConfig for swap and HCO")
 		})
 
 		It("should create MachineConfig item with correct properties", func() {
@@ -193,7 +213,7 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 				"enableSwap": "true",
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(items).To(HaveLen(1), "should generate MachineConfig when enableSwap=true")
+			Expect(items).To(HaveLen(2), "should generate MachineConfig and HCO when enableSwap=true")
 		})
 
 		It("should handle various truthy values for enableSwap", func() {
@@ -204,7 +224,7 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 					"enableSwap": value,
 				})
 				Expect(err).NotTo(HaveOccurred())
-				Expect(items).To(HaveLen(1), "value %q should enable swap", value)
+				Expect(items).To(HaveLen(2), "value %q should enable swap and HCO", value)
 			}
 		})
 	})
@@ -215,7 +235,7 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 				"enableSwap": "false",
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(items).To(BeEmpty(), "should not generate any items when swap is disabled")
+			Expect(items).To(HaveLen(1), "should generate HCO item when swap is disabled")
 		})
 	})
 
@@ -335,26 +355,166 @@ var _ = Describe("VirtHigherDensityProfile Integration Tests", func() {
 				"enableSwap": "true",
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(itemsEnabled).To(HaveLen(1), "should generate item when enabled")
+			Expect(itemsEnabled).To(HaveLen(2), "should generate MachineConfig and HCO when enabled")
 
 			// Test with swap disabled
 			itemsDisabled, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
 				"enableSwap": "false",
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(itemsDisabled).To(BeEmpty(), "should not generate items when disabled")
+			Expect(itemsDisabled).To(HaveLen(1), "should still generate HCO item when swap disabled")
 		})
 
 		It("should default to swap enabled when not specified", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(items).To(HaveLen(1), "should default to swap enabled")
+			Expect(items).To(HaveLen(2), "should default to swap enabled (MC + HCO)")
 		})
 
 		It("should default to swap enabled when config is nil", func() {
 			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, nil)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(items).To(HaveLen(1), "should default to swap enabled with nil config")
+			Expect(items).To(HaveLen(2), "should default to swap enabled with nil config (MC + HCO)")
+		})
+	})
+
+	Describe("HCO Configuration Integration", func() {
+		It("should generate HCO item with default KSM enabled and memory ratio 150", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap": "true",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(items).To(HaveLen(2), "should generate MachineConfig and HCO items")
+
+			// Find the HCO item
+			var hcoItem *advisorv1alpha1.VirtPlatformConfigItem
+			for i := range items {
+				if items[i].TargetRef.Kind == "HyperConverged" {
+					hcoItem = &items[i]
+					break
+				}
+			}
+			Expect(hcoItem).NotTo(BeNil(), "should have HCO item")
+
+			// Verify basic properties
+			Expect(hcoItem.Name).To(Equal("configure-higher-density"))
+			Expect(hcoItem.TargetRef.Kind).To(Equal("HyperConverged"))
+			Expect(hcoItem.TargetRef.APIVersion).To(Equal("hco.kubevirt.io/v1beta1"))
+			Expect(hcoItem.TargetRef.Name).To(Equal("kubevirt-hyperconverged"))
+			Expect(hcoItem.TargetRef.Namespace).To(Equal("openshift-cnv"))
+			Expect(hcoItem.State).To(Equal(advisorv1alpha1.ItemStatePending))
+			Expect(hcoItem.ImpactSeverity).To(Equal(advisorv1alpha1.ImpactMedium))
+		})
+
+		It("should include KSM configuration in HCO diff by default", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap": "true",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var hcoItem *advisorv1alpha1.VirtPlatformConfigItem
+			for i := range items {
+				if items[i].TargetRef.Kind == "HyperConverged" {
+					hcoItem = &items[i]
+					break
+				}
+			}
+
+			// Should show KSM configuration
+			Expect(hcoItem.Diff).To(ContainSubstring("ksmConfiguration"))
+			Expect(hcoItem.Diff).To(ContainSubstring("nodeLabelSelector"))
+			Expect(hcoItem.Message).To(ContainSubstring("KSM enabled"))
+		})
+
+		It("should include memory overcommit in HCO diff with default 150", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap": "true",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var hcoItem *advisorv1alpha1.VirtPlatformConfigItem
+			for i := range items {
+				if items[i].TargetRef.Kind == "HyperConverged" {
+					hcoItem = &items[i]
+					break
+				}
+			}
+
+			// Should show memory overcommit percentage
+			Expect(hcoItem.Diff).To(ContainSubstring("higherWorkloadDensity"))
+			Expect(hcoItem.Diff).To(ContainSubstring("memoryOvercommitPercentage"))
+			Expect(hcoItem.Diff).To(ContainSubstring("150"))
+		})
+
+		It("should set correct managed fields for HCO item", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap": "true",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var hcoItem *advisorv1alpha1.VirtPlatformConfigItem
+			for i := range items {
+				if items[i].TargetRef.Kind == "HyperConverged" {
+					hcoItem = &items[i]
+					break
+				}
+			}
+
+			Expect(hcoItem.ManagedFields).To(ContainElement("spec.higherWorkloadDensity.memoryOvercommitPercentage"))
+			Expect(hcoItem.ManagedFields).To(ContainElement("spec.ksmConfiguration"))
+		})
+
+		It("should support custom memory ratio", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap":           "true",
+				"memoryToRequestRatio": "200",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var hcoItem *advisorv1alpha1.VirtPlatformConfigItem
+			for i := range items {
+				if items[i].TargetRef.Kind == "HyperConverged" {
+					hcoItem = &items[i]
+					break
+				}
+			}
+
+			Expect(hcoItem.Diff).To(ContainSubstring("200"))
+			Expect(hcoItem.Message).To(ContainSubstring("memoryOvercommitPercentage=200"))
+		})
+
+		It("should support disabling KSM", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap": "true",
+				"ksmEnabled": "false",
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			var hcoItem *advisorv1alpha1.VirtPlatformConfigItem
+			for i := range items {
+				if items[i].TargetRef.Kind == "HyperConverged" {
+					hcoItem = &items[i]
+					break
+				}
+			}
+
+			// Should NOT have ksmConfiguration in diff
+			Expect(hcoItem.Diff).NotTo(ContainSubstring("ksmConfiguration"))
+			Expect(hcoItem.Message).NotTo(ContainSubstring("KSM enabled"))
+
+			// Should only manage memory overcommit field
+			Expect(hcoItem.ManagedFields).To(ConsistOf("spec.higherWorkloadDensity.memoryOvercommitPercentage"))
+		})
+
+		It("should generate only HCO item when swap is disabled", func() {
+			items, err := profile.GeneratePlanItems(integrationCtx, integrationK8sClient, map[string]string{
+				"enableSwap": "false",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(items).To(HaveLen(1), "should only generate HCO item when swap disabled")
+
+			hcoItem := items[0]
+			Expect(hcoItem.TargetRef.Kind).To(Equal("HyperConverged"))
 		})
 	})
 })
@@ -369,6 +529,20 @@ func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
 	var crd apiextensionsv1.CustomResourceDefinition
 	err = yaml.Unmarshal(crdBytes, &crd)
 	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfig CRD")
+
+	return &crd
+}
+
+// Helper function to load HyperConverged CRD from file
+func loadHyperConvergedCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	// Load the actual HyperConverged CRD from the mocks directory
+	crdPath := filepath.Join("..", "..", "..", "config", "crd", "mocks", "hyperconverged_crd.yaml")
+	crdBytes, err := os.ReadFile(crdPath)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read HyperConverged CRD file")
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	err = yaml.Unmarshal(crdBytes, &crd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal HyperConverged CRD")
 
 	return &crd
 }

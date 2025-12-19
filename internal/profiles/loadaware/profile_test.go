@@ -314,28 +314,28 @@ func TestLoadAwareProfile_EvictionLimitDefaults(t *testing.T) {
 }
 
 func TestLoadAwareProfile_HCOConstants(t *testing.T) {
-	// Verify HyperConverged resource constants
-	if hyperConvergedNamespace != "openshift-cnv" {
-		t.Errorf("hyperConvergedNamespace = %q, want %q", hyperConvergedNamespace, "openshift-cnv")
+	// Verify HyperConverged resource constants (now in profileutils)
+	if profileutils.HyperConvergedNamespace != "openshift-cnv" {
+		t.Errorf("HyperConvergedNamespace = %q, want %q", profileutils.HyperConvergedNamespace, "openshift-cnv")
 	}
 
-	if hyperConvergedName != "kubevirt-hyperconverged" {
-		t.Errorf("hyperConvergedName = %q, want %q", hyperConvergedName, "kubevirt-hyperconverged")
+	if profileutils.HyperConvergedName != "kubevirt-hyperconverged" {
+		t.Errorf("HyperConvergedName = %q, want %q", profileutils.HyperConvergedName, "kubevirt-hyperconverged")
 	}
 
 	if hyperConvergedCRD != "hyperconvergeds.hco.kubevirt.io" {
 		t.Errorf("hyperConvergedCRD = %q, want %q", hyperConvergedCRD, "hyperconvergeds.hco.kubevirt.io")
 	}
 
-	// Verify HyperConvergedGVK
-	if HyperConvergedGVK.Group != "hco.kubevirt.io" {
-		t.Errorf("HyperConvergedGVK.Group = %q, want %q", HyperConvergedGVK.Group, "hco.kubevirt.io")
+	// Verify HyperConvergedGVK (now in profileutils)
+	if profileutils.HyperConvergedGVK.Group != "hco.kubevirt.io" {
+		t.Errorf("HyperConvergedGVK.Group = %q, want %q", profileutils.HyperConvergedGVK.Group, "hco.kubevirt.io")
 	}
-	if HyperConvergedGVK.Version != "v1beta1" {
-		t.Errorf("HyperConvergedGVK.Version = %q, want %q", HyperConvergedGVK.Version, "v1beta1")
+	if profileutils.HyperConvergedGVK.Version != "v1beta1" {
+		t.Errorf("HyperConvergedGVK.Version = %q, want %q", profileutils.HyperConvergedGVK.Version, "v1beta1")
 	}
-	if HyperConvergedGVK.Kind != "HyperConverged" {
-		t.Errorf("HyperConvergedGVK.Kind = %q, want %q", HyperConvergedGVK.Kind, "HyperConverged")
+	if profileutils.HyperConvergedGVK.Kind != "HyperConverged" {
+		t.Errorf("HyperConvergedGVK.Kind = %q, want %q", profileutils.HyperConvergedGVK.Kind, "HyperConverged")
 	}
 }
 

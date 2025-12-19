@@ -17,6 +17,7 @@ limitations under the License.
 package profiles
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -81,6 +82,29 @@ func virtHigherDensityToMap(config *advisorv1alpha1.VirtHigherDensityConfig) map
 
 	if config.EnableSwap != nil {
 		m["enableSwap"] = strconv.FormatBool(*config.EnableSwap)
+	}
+
+	if config.KSMConfiguration != nil {
+		// Check if KSM is explicitly enabled (default is true)
+		enabled := true
+		if config.KSMConfiguration.Enabled != nil {
+			enabled = *config.KSMConfiguration.Enabled
+		}
+		m["ksmEnabled"] = strconv.FormatBool(enabled)
+
+		// Serialize the node selector if KSM is enabled
+		if enabled && config.KSMConfiguration.NodeLabelSelector != nil {
+			if selectorJSON, err := json.Marshal(config.KSMConfiguration.NodeLabelSelector); err == nil {
+				m["ksmNodeLabelSelector"] = string(selectorJSON)
+			}
+		}
+	} else {
+		// Default behavior when ksmConfiguration is omitted: enabled with all nodes
+		m["ksmEnabled"] = "true"
+	}
+
+	if config.MemoryToRequestRatio != nil {
+		m["memoryToRequestRatio"] = strconv.FormatInt(int64(*config.MemoryToRequestRatio), 10)
 	}
 
 	return m
