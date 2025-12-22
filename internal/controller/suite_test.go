@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -146,28 +147,25 @@ func getFirstFoundEnvTestBinaryDir() string {
 	return ""
 }
 
-// loadHyperConvergedCRDFromFile loads the HyperConverged CRD from the mocks directory
-func loadHyperConvergedCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
-	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "hyperconverged_crd.yaml")
+// loadCRDFromFile loads a CRD from the specified filename in the mocks directory
+func loadCRDFromFile(filename string) *apiextensionsv1.CustomResourceDefinition {
+	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", filename)
 	crdBytes, err := os.ReadFile(crdPath)
-	Expect(err).NotTo(HaveOccurred(), "Failed to read HyperConverged CRD file")
+	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Failed to read CRD file: %s", filename))
 
 	var crd apiextensionsv1.CustomResourceDefinition
 	err = yaml.Unmarshal(crdBytes, &crd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal HyperConverged CRD")
+	Expect(err).NotTo(HaveOccurred(), fmt.Sprintf("Failed to unmarshal CRD: %s", filename))
 
 	return &crd
 }
 
+// loadHyperConvergedCRDFromFile loads the HyperConverged CRD from the mocks directory
+func loadHyperConvergedCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
+	return loadCRDFromFile("hyperconverged_crd.yaml")
+}
+
 // loadMachineConfigCRDFromFile loads the MachineConfig CRD from the mocks directory
 func loadMachineConfigCRDFromFile() *apiextensionsv1.CustomResourceDefinition {
-	crdPath := filepath.Join("..", "..", "config", "crd", "mocks", "machineconfig_crd.yaml")
-	crdBytes, err := os.ReadFile(crdPath)
-	Expect(err).NotTo(HaveOccurred(), "Failed to read MachineConfig CRD file")
-
-	var crd apiextensionsv1.CustomResourceDefinition
-	err = yaml.Unmarshal(crdBytes, &crd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to unmarshal MachineConfig CRD")
-
-	return &crd
+	return loadCRDFromFile("machineconfig_crd.yaml")
 }

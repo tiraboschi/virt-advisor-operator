@@ -110,32 +110,6 @@ func virtHigherDensityToMap(config *advisorv1alpha1.VirtHigherDensityConfig) map
 	return m
 }
 
-// GetIntConfig extracts an integer configuration value from map with a default.
-func GetIntConfig(configMap map[string]string, key string, defaultValue int) int {
-	if v, ok := configMap[key]; ok {
-		if i, err := strconv.Atoi(v); err == nil {
-			return i
-		}
-	}
-	return defaultValue
-}
-
-// GetBoolConfig extracts a boolean configuration value from map with a default.
-func GetBoolConfig(configMap map[string]string, key string, defaultValue bool) bool {
-	if v, ok := configMap[key]; ok {
-		return v != "false"
-	}
-	return defaultValue
-}
-
-// GetStringConfig extracts a string configuration value from map with a default.
-func GetStringConfig(configMap map[string]string, key string, defaultValue string) string {
-	if v, ok := configMap[key]; ok {
-		return v
-	}
-	return defaultValue
-}
-
 // ValidateOptions ensures the ProfileOptions matches the selected profile.
 // This is a runtime check in addition to CEL validation.
 func ValidateOptions(profileName string, options *advisorv1alpha1.ProfileOptions) error {

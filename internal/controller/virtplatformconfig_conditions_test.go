@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 // TestUpdatePhaseConditions tests that updatePhase correctly sets all condition types, reasons, and messages using constants
@@ -667,7 +668,7 @@ func TestInt32PtrEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := int32PtrEqual(tt.a, tt.b)
+			result := util.PtrEqual(tt.a, tt.b)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -692,7 +693,7 @@ func TestBoolPtrEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := boolPtrEqual(tt.a, tt.b)
+			result := util.PtrEqual(tt.a, tt.b)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -716,7 +717,7 @@ func TestStringPtrEqual(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stringPtrEqual(tt.a, tt.b)
+			result := util.PtrEqual(tt.a, tt.b)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
