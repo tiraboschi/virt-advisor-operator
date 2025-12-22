@@ -1527,6 +1527,294 @@ spec:
 			Expect(category).To(Equal("density"),
 				"Category should be 'density' for virt-higher-density profile")
 		})
+
+		It("should reject memoryToRequestRatio > 120 without enableSwap", func() {
+			By("attempting to create virt-higher-density with high memory ratio but no swap")
+			invalidYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: false
+      memoryToRequestRatio: 150
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err := cmd.CombinedOutput()
+
+			Expect(err).To(HaveOccurred(), "Should reject high memory ratio without swap")
+			Expect(string(output)).To(ContainSubstring("memoryToRequestRatio > 120 requires enableSwap=true"),
+				"Error should mention CEL validation rule")
+		})
+
+		It("should accept memoryToRequestRatio range 100-300", func() {
+			validRatios := []int32{100, 120, 150, 200, 300}
+
+			for _, ratio := range validRatios {
+				By(fmt.Sprintf("applying with memoryToRequestRatio=%d", ratio))
+				sampleYAML := fmt.Sprintf(`
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      memoryToRequestRatio: %d
+`, ratio)
+				cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+				cmd.Stdin = strings.NewReader(sampleYAML)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(),
+					fmt.Sprintf("Should accept memoryToRequestRatio=%d", ratio))
+
+				// Clean up for next iteration
+				cmd = exec.Command("kubectl", "delete", "virtplatformconfig", "virt-higher-density",
+					"--ignore-not-found=true")
+				_, _ = utils.Run(cmd)
+				time.Sleep(2 * time.Second)
+			}
+		})
+
+		It("should reject memoryToRequestRatio out of range", func() {
+			By("attempting to create with memoryToRequestRatio < 100")
+			invalidYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      memoryToRequestRatio: 50
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err := cmd.CombinedOutput()
+			Expect(err).To(HaveOccurred(), "Should reject memoryToRequestRatio < 100")
+			Expect(string(output)).To(Or(
+				ContainSubstring("100"),
+				ContainSubstring("minimum"),
+			), "Error should mention minimum value")
+
+			By("attempting to create with memoryToRequestRatio > 300")
+			invalidYAML = `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      memoryToRequestRatio: 500
+`
+			cmd = exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(invalidYAML)
+			output, err = cmd.CombinedOutput()
+			Expect(err).To(HaveOccurred(), "Should reject memoryToRequestRatio > 300")
+			Expect(string(output)).To(Or(
+				ContainSubstring("300"),
+				ContainSubstring("maximum"),
+			), "Error should mention maximum value")
+		})
+
+		It("should accept KSM configuration with empty selector", func() {
+			By("applying virt-higher-density with KSM enabled on all nodes")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      ksmConfiguration:
+        nodeLabelSelector: {}
+      memoryToRequestRatio: 150
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept KSM with empty selector")
+
+			By("verifying the VirtPlatformConfig is created with KSM config")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var vpc map[string]interface{}
+				err = json.Unmarshal([]byte(output), &vpc)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				spec := vpc["spec"].(map[string]interface{})
+				options := spec["options"].(map[string]interface{})
+				virtHigherDensity := options["virtHigherDensity"].(map[string]interface{})
+				g.Expect(virtHigherDensity["ksmConfiguration"]).NotTo(BeNil(),
+					"KSM configuration should be present")
+			}).Should(Succeed())
+		})
+
+		It("should accept KSM configuration with node selector", func() {
+			By("applying virt-higher-density with KSM on specific nodes")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      ksmConfiguration:
+        nodeLabelSelector:
+          matchLabels:
+            ksm-enabled: "true"
+      memoryToRequestRatio: 150
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept KSM with node selector")
+
+			By("verifying the VirtPlatformConfig is created with correct selector")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var vpc map[string]interface{}
+				err = json.Unmarshal([]byte(output), &vpc)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				spec := vpc["spec"].(map[string]interface{})
+				options := spec["options"].(map[string]interface{})
+				virtHigherDensity := options["virtHigherDensity"].(map[string]interface{})
+				ksmConfig := virtHigherDensity["ksmConfiguration"].(map[string]interface{})
+				selector := ksmConfig["nodeLabelSelector"].(map[string]interface{})
+				matchLabels := selector["matchLabels"].(map[string]interface{})
+				g.Expect(matchLabels["ksm-enabled"]).To(Equal("true"))
+			}).Should(Succeed())
+		})
+
+		It("should accept configuration without KSM", func() {
+			By("applying virt-higher-density without ksmConfiguration field")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      memoryToRequestRatio: 120
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept config without KSM")
+
+			By("verifying the VirtPlatformConfig has no ksmConfiguration")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var vpc map[string]interface{}
+				err = json.Unmarshal([]byte(output), &vpc)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				spec := vpc["spec"].(map[string]interface{})
+				options := spec["options"].(map[string]interface{})
+				virtHigherDensity := options["virtHigherDensity"].(map[string]interface{})
+				_, hasKSM := virtHigherDensity["ksmConfiguration"]
+				g.Expect(hasKSM).To(BeFalse(),
+					"ksmConfiguration should not be present when omitted")
+			}).Should(Succeed())
+		})
+
+		It("should accept KSM with matchExpressions selector", func() {
+			By("applying virt-higher-density with KSM using matchExpressions")
+			sampleYAML := `
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: DryRun
+  failurePolicy: Abort
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      ksmConfiguration:
+        nodeLabelSelector:
+          matchExpressions:
+            - key: node-role.kubernetes.io/worker
+              operator: Exists
+      memoryToRequestRatio: 150
+`
+			cmd := exec.Command("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "-")
+			cmd.Stdin = strings.NewReader(sampleYAML)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Should accept KSM with matchExpressions")
+
+			By("verifying the VirtPlatformConfig is created with matchExpressions")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "virtplatformconfig", "virt-higher-density",
+					"-o", "json")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				var vpc map[string]interface{}
+				err = json.Unmarshal([]byte(output), &vpc)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				spec := vpc["spec"].(map[string]interface{})
+				options := spec["options"].(map[string]interface{})
+				virtHigherDensity := options["virtHigherDensity"].(map[string]interface{})
+				ksmConfig := virtHigherDensity["ksmConfiguration"].(map[string]interface{})
+				selector := ksmConfig["nodeLabelSelector"].(map[string]interface{})
+				matchExpressions := selector["matchExpressions"].([]interface{})
+				g.Expect(matchExpressions).To(HaveLen(1))
+
+				expr := matchExpressions[0].(map[string]interface{})
+				g.Expect(expr["key"]).To(Equal("node-role.kubernetes.io/worker"))
+				g.Expect(expr["operator"]).To(Equal("Exists"))
+			}).Should(Succeed())
+		})
 	})
 
 	Context("Combined Profiles", func() {

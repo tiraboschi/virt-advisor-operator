@@ -168,9 +168,13 @@ internal/profiles/
 
 ### 📦 virt-higher-density
 
-**Purpose**: Enables higher VM density through kubelet swap and memory overcommitment
+**Purpose**: Enables higher VM density through KSM, memory overcommitment, and kubelet swap
 
 **What it configures:**
+- **HyperConverged (HCO)**: Configures virtualization density features
+  - **KSM (Kernel Samepage Merging)**: Memory deduplication across VMs
+  - **Memory Overcommit**: Allows VMs to see more memory than pod requests
+  - **Drift Detection**: Monitors HCO for external changes and auto-converges
 - **MachineConfig**: Deploys swap configuration for worker nodes
   - Provisions swap from partition labeled `CNV_SWAP`
   - Configures kubelet with `LimitedSwap` behavior
@@ -180,16 +184,29 @@ internal/profiles/
 **Configuration options:**
 | Option | Default | Description |
 |--------|---------|-------------|
-| `enableSwap` | `true` | Enable swap on worker nodes |
+| `enableSwap` | `true` | Enable kubelet swap on worker nodes |
+| `ksmConfiguration.nodeLabelSelector` | `{}` (all nodes) | Target specific nodes for KSM. Omit to disable KSM entirely |
+| `memoryToRequestRatio` | `150` | Memory overcommit percentage (100-300). Values >120 require `enableSwap=true` |
+
+**HCO Integration & Drift Detection:**
+- Profile reads from and writes to HyperConverged CR
+- Automatically detects external HCO changes (e.g., admin modifying memory settings)
+- Triggers plan regeneration with forced user review
+- User overrides take precedence over HCO-derived defaults
+- Auto-resolves if external changes are reverted
 
 **Prerequisites:**
-- Nodes must have swap partition labeled `CNV_SWAP`
-- MachineConfig CRD (OpenShift only)
+- **HyperConverged CRD**: OpenShift Virtualization must be installed
+- **MachineConfig CRD**: OpenShift only (not available on vanilla Kubernetes)
+- **Swap Partition**: Nodes must have partition labeled `CNV_SWAP` if `enableSwap=true`
 
 **Impact:**
-- 🔴 **High**: Requires node reboot for swap configuration
+- 🟡 **Medium**: HCO configuration changes (KSM and memory overcommit, no reboot)
+- 🔴 **High**: MachineConfig deployment (requires node reboots)
 
 **Example usage:**
+
+**Basic configuration (all defaults):**
 ```yaml
 apiVersion: advisor.kubevirt.io/v1alpha1
 kind: VirtPlatformConfig
@@ -198,10 +215,67 @@ metadata:
 spec:
   profile: virt-higher-density
   action: DryRun
+  # Uses defaults: swap enabled, KSM on all nodes, 150% memory overcommit
+```
+
+**Maximum density with KSM on all nodes:**
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: Apply
   options:
     virtHigherDensity:
       enableSwap: true
+      ksmConfiguration:
+        nodeLabelSelector: {}  # Empty selector = all nodes
+      memoryToRequestRatio: 200  # High overcommit (requires swap)
 ```
+
+**KSM on specific nodes only:**
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: Apply
+  options:
+    virtHigherDensity:
+      enableSwap: true
+      ksmConfiguration:
+        nodeLabelSelector:
+          matchLabels:
+            ksm-enabled: "true"  # Only nodes with this label
+      memoryToRequestRatio: 150
+```
+
+**Higher density without swap (safe maximum):**
+```yaml
+apiVersion: advisor.kubevirt.io/v1alpha1
+kind: VirtPlatformConfig
+metadata:
+  name: virt-higher-density
+spec:
+  profile: virt-higher-density
+  action: Apply
+  options:
+    virtHigherDensity:
+      enableSwap: false
+      memoryToRequestRatio: 120  # Max without swap (CEL validation)
+      # ksmConfiguration omitted = KSM disabled
+```
+
+**📖 For complete documentation**, see [VirtHigherDensity Profile Guide](docs/VIRTHIGHERDENSITY_PROFILE.md) covering:
+- KSM and memory overcommit configuration
+- CEL validation rules
+- Drift detection and auto-convergence workflows
+- Swap partition setup
+- Troubleshooting and rollback procedures
 
 ## Deployment
 
