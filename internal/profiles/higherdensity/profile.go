@@ -31,6 +31,7 @@ import (
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 const (
@@ -277,11 +278,11 @@ func (p *VirtHigherDensityProfile) GetHCOConfigForTesting(ctx context.Context, c
 	}
 
 	// Check if KSM is enabled (spec.ksmConfiguration exists)
-	ksmConfig, found, err := unstructured.NestedMap(hco.Object, "spec", "ksmConfiguration")
+	ksmConfig, found, err := util.GetNestedMap(hco, "spec", "ksmConfiguration")
 	ksmEnabled := found && err == nil && ksmConfig != nil
 
 	// Extract memory overcommit percentage
-	memoryPct, found, err := unstructured.NestedInt64(hco.Object, "spec", "higherWorkloadDensity", "memoryOvercommitPercentage")
+	memoryPct, found, err := util.GetNestedInt64(hco, "spec", "higherWorkloadDensity", "memoryOvercommitPercentage")
 	if err != nil || !found {
 		return ksmEnabled, 0, fmt.Errorf("memoryOvercommitPercentage not found in HCO CR")
 	}

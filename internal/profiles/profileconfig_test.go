@@ -21,6 +21,7 @@ import (
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
+	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
 )
 
 // TestOptionsToMap tests the OptionsToMap conversion function
@@ -193,7 +194,7 @@ func TestGetIntConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := GetIntConfig(tt.configMap, tt.key, tt.defaultValue)
+			result := profileutils.GetIntConfig(tt.configMap, tt.key, tt.defaultValue)
 			if result != tt.expected {
 				t.Errorf("Expected %d, got %d", tt.expected, result)
 			}
@@ -277,7 +278,7 @@ func TestGetBoolConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := GetBoolConfig(tt.configMap, tt.key, tt.defaultValue)
+			result := profileutils.GetBoolConfig(tt.configMap, tt.key, tt.defaultValue)
 			if result != tt.expected {
 				t.Errorf("Expected %v, got %v", tt.expected, result)
 			}
@@ -340,7 +341,7 @@ func TestGetStringConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := GetStringConfig(tt.configMap, tt.key, tt.defaultValue)
+			result := profileutils.GetStringConfig(tt.configMap, tt.key, tt.defaultValue)
 			if result != tt.expected {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}

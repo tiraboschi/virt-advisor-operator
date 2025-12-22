@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 // WaitStrategy defines how to wait for a resource to become healthy after applying changes.
@@ -135,8 +136,11 @@ func (s *MachineConfigWaitStrategy) Wait(ctx context.Context, c client.Client, i
 	}
 
 	// Extract status fields
-	status, found, err := unstructured.NestedMap(mcp.Object, "status")
-	if err != nil || !found {
+	status, found, err := util.GetNestedMap(mcp, "status")
+	if err != nil {
+		return "", false, err // Error already has context from util helper
+	}
+	if !found {
 		return "MachineConfigPool status not available", false, nil
 	}
 
