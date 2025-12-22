@@ -30,6 +30,7 @@ import (
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles/profileutils"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 const (
@@ -228,13 +229,13 @@ func (p *LoadAwareRebalancingProfile) getHCOMigrationLimits(ctx context.Context,
 
 	// Extract migration limits from spec.liveMigrationConfig
 	// parallelMigrationsPerCluster -> total cluster-wide evictions
-	totalLimit, totalFound, err := unstructured.NestedInt64(hco.Object, "spec", "liveMigrationConfig", "parallelMigrationsPerCluster")
+	totalLimit, totalFound, err := util.GetNestedInt64(hco, "spec", "liveMigrationConfig", "parallelMigrationsPerCluster")
 	if err != nil {
 		logger.V(1).Info("Error reading parallelMigrationsPerCluster from HCO", "error", err)
 	}
 
 	// parallelOutboundMigrationsPerNode -> evictions per node
-	nodeLimit, nodeFound, err := unstructured.NestedInt64(hco.Object, "spec", "liveMigrationConfig", "parallelOutboundMigrationsPerNode")
+	nodeLimit, nodeFound, err := util.GetNestedInt64(hco, "spec", "liveMigrationConfig", "parallelOutboundMigrationsPerNode")
 	if err != nil {
 		logger.V(1).Info("Error reading parallelOutboundMigrationsPerNode from HCO", "error", err)
 	}
@@ -411,7 +412,7 @@ func stringInSlice(s string, slice []string) bool {
 func extractAvailableProfiles(crd *unstructured.Unstructured) []string {
 	// Navigate the CRD schema to find the profiles enum
 	// Path: spec.versions[].schema.openAPIV3Schema.properties.spec.properties.profiles.items.enum
-	versions, found, err := unstructured.NestedSlice(crd.Object, "spec", "versions")
+	versions, found, err := util.GetNestedSlice(crd, "spec", "versions")
 	if !found || err != nil {
 		return nil
 	}
@@ -456,7 +457,7 @@ func (p *LoadAwareRebalancingProfile) buildProfilesList(ctx context.Context, c c
 	existing, err := plan.GetUnstructured(ctx, c, KubeDeschedulerGVK, kubeDeschedulerName, kubeDeschedulerNamespace)
 	if err == nil {
 		// Extract existing profiles
-		currentProfiles, found, _ := unstructured.NestedSlice(existing.Object, "spec", "profiles")
+		currentProfiles, found, _ := util.GetNestedSlice(existing, "spec", "profiles")
 		if found {
 			// Keep only AffinityAndTaints and SoftTopologyAndDuplicates
 			for _, p := range currentProfiles {

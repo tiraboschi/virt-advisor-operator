@@ -39,6 +39,7 @@ import (
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
 	"github.com/kubevirt/virt-advisor-operator/internal/discovery"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 // This file contains watch setup and predicate functions for the VirtPlatformConfig controller.
@@ -359,8 +360,8 @@ func (r *VirtPlatformConfigReconciler) hcoConfigPredicate() predicate.Predicate 
 			configChanged := false
 
 			// Check liveMigrationConfig (load-aware-rebalancing profile)
-			oldMig, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "liveMigrationConfig")
-			newMig, _, _ := unstructured.NestedMap(newObj.Object, "spec", "liveMigrationConfig")
+			oldMig, _, _ := util.GetNestedMap(oldObj, "spec", "liveMigrationConfig")
+			newMig, _, _ := util.GetNestedMap(newObj, "spec", "liveMigrationConfig")
 			oldMigJSON, _ := json.Marshal(oldMig)
 			newMigJSON, _ := json.Marshal(newMig)
 			if string(oldMigJSON) != string(newMigJSON) {
@@ -368,8 +369,8 @@ func (r *VirtPlatformConfigReconciler) hcoConfigPredicate() predicate.Predicate 
 			}
 
 			// Check higherWorkloadDensity (virt-higher-density profile)
-			oldDens, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "higherWorkloadDensity")
-			newDens, _, _ := unstructured.NestedMap(newObj.Object, "spec", "higherWorkloadDensity")
+			oldDens, _, _ := util.GetNestedMap(oldObj, "spec", "higherWorkloadDensity")
+			newDens, _, _ := util.GetNestedMap(newObj, "spec", "higherWorkloadDensity")
 			oldDensJSON, _ := json.Marshal(oldDens)
 			newDensJSON, _ := json.Marshal(newDens)
 			if string(oldDensJSON) != string(newDensJSON) {
@@ -377,8 +378,8 @@ func (r *VirtPlatformConfigReconciler) hcoConfigPredicate() predicate.Predicate 
 			}
 
 			// Check ksmConfiguration (virt-higher-density profile)
-			oldKSM, _, _ := unstructured.NestedMap(oldObj.Object, "spec", "ksmConfiguration")
-			newKSM, _, _ := unstructured.NestedMap(newObj.Object, "spec", "ksmConfiguration")
+			oldKSM, _, _ := util.GetNestedMap(oldObj, "spec", "ksmConfiguration")
+			newKSM, _, _ := util.GetNestedMap(newObj, "spec", "ksmConfiguration")
 			oldKSMJSON, _ := json.Marshal(oldKSM)
 			newKSMJSON, _ := json.Marshal(newKSM)
 			if string(oldKSMJSON) != string(newKSMJSON) {

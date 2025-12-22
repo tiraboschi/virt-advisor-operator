@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/kubevirt/virt-advisor-operator/internal/plan"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 // MachineConfigPoolGVK is the GroupVersionKind for MachineConfigPool
@@ -132,9 +133,9 @@ func GetMachineConfigPoolForRole(ctx context.Context, c client.Client, role stri
 // Returns the value at status.configuration.name which points to the merged/rendered MachineConfig.
 func GetRenderedMachineConfigName(pool *unstructured.Unstructured) (string, error) {
 	// Path: status.configuration.name
-	name, found, err := unstructured.NestedString(pool.Object, "status", "configuration", "name")
+	name, found, err := util.GetNestedString(pool, "status", "configuration", "name")
 	if err != nil {
-		return "", fmt.Errorf("failed to extract rendered config name: %w", err)
+		return "", err // Error already has context from util helper
 	}
 	if !found || name == "" {
 		return "", fmt.Errorf("pool %s has no rendered configuration", pool.GetName())

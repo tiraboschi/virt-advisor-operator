@@ -29,6 +29,7 @@ import (
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles/higherdensity"
 	"github.com/kubevirt/virt-advisor-operator/internal/profiles/loadaware"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 // This file contains HCO (HyperConverged Operator) dependency tracking logic.
@@ -210,15 +211,18 @@ func (r *VirtPlatformConfigReconciler) extractAppliedHCOConfig(ctx context.Conte
 	}
 
 	// Check if KSM is configured
-	_, ksmFound, err := unstructured.NestedMap(hco.Object, "spec", "ksmConfiguration")
+	_, ksmFound, err := util.GetNestedMap(hco, "spec", "ksmConfiguration")
 	if err != nil {
-		return false, 0, fmt.Errorf("error reading ksmConfiguration: %w", err)
+		return false, 0, err // Error already has context from util helper
 	}
 
 	// Extract memory overcommit percentage
-	memoryPct, found, err := unstructured.NestedInt64(hco.Object, "spec", "higherWorkloadDensity", "memoryOvercommitPercentage")
-	if err != nil || !found {
-		return false, 0, fmt.Errorf("memoryOvercommitPercentage not found: %w", err)
+	memoryPct, found, err := util.GetNestedInt64(hco, "spec", "higherWorkloadDensity", "memoryOvercommitPercentage")
+	if err != nil {
+		return false, 0, err
+	}
+	if !found {
+		return false, 0, fmt.Errorf("memoryOvercommitPercentage not found in HCO spec.higherWorkloadDensity")
 	}
 
 	return ksmFound, int32(memoryPct), nil
@@ -257,15 +261,15 @@ func (r *VirtPlatformConfigReconciler) extractAppliedEvictionLimits(ctx context.
 	}
 
 	// Extract evictionLimits from spec.evictionLimits (not profileCustomizations)
-	total, _, err := unstructured.NestedInt64(descheduler.Object, "spec", "evictionLimits", "total")
+	total, _, err := util.GetNestedInt64(descheduler, "spec", "evictionLimits", "total")
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to extract evictionLimits.total: %w", err)
+		return 0, 0, err
 	}
 
 	// Note: node field may not exist in older Descheduler CRD versions
-	node, found, err := unstructured.NestedInt64(descheduler.Object, "spec", "evictionLimits", "node")
+	node, found, err := util.GetNestedInt64(descheduler, "spec", "evictionLimits", "node")
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to extract evictionLimits.node: %w", err)
+		return 0, 0, err
 	}
 	if !found {
 		// Older CRD versions don't have the node field, default to 0

@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	advisorv1alpha1 "github.com/kubevirt/virt-advisor-operator/api/v1alpha1"
+	"github.com/kubevirt/virt-advisor-operator/internal/util"
 )
 
 // buildResourceKey creates a stable key for a resource
@@ -56,9 +57,9 @@ func extractManagedState(obj *unstructured.Unstructured, item *advisorv1alpha1.V
 		}
 	} else {
 		// Fallback: if no managed fields specified, hash entire spec
-		spec, found, err := unstructured.NestedMap(obj.Object, "spec")
+		spec, found, err := util.GetNestedMap(obj, "spec")
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract spec from %s/%s: %w", item.TargetRef.Kind, item.TargetRef.Name, err)
+			return nil, err // Error already has context from util helper
 		}
 		if found {
 			managedState["spec"] = spec
