@@ -339,6 +339,13 @@ func TestLoadAwareProfile_HCOConstants(t *testing.T) {
 	}
 }
 
+func TestLoadAwareProfile_ManagementStateDefaults(t *testing.T) {
+	// Verify that the default mode is correctly defined
+	if defaultMode != "Automatic" {
+		t.Errorf("defaultMode = %q, want %q", defaultMode, "Automatic")
+	}
+}
+
 // contains checks if a string contains a substring.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||

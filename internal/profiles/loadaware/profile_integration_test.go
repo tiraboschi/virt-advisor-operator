@@ -238,8 +238,12 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			deschedulerItem := items[1]
+			Expect(deschedulerItem.Diff).To(ContainSubstring("managementState"), "should show managementState field")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("Managed"), "should show managementState value as Managed")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("deschedulingIntervalSeconds"), "should show interval field")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("60"), "should show default interval value")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("mode"), "should show mode field")
+			Expect(deschedulerItem.Diff).To(ContainSubstring("Automatic"), "should show default mode value")
 			Expect(deschedulerItem.Diff).To(ContainSubstring("profiles"), "should show profiles field")
 			// Should show one of the preferred profiles (exact profile depends on CRD schema)
 			Expect(deschedulerItem.Diff).To(MatchRegexp("KubeVirtRelieveAndMigrate|DevKubeVirtRelieveAndMigrate|LongLifecycle"), "should show a KubeVirt profile")
@@ -267,7 +271,9 @@ var _ = Describe("LoadAwareRebalancingProfile Integration Tests", func() {
 
 			deschedulerItem := items[1]
 			// For KubeVirt profiles, profileCustomizations is also managed
+			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.managementState"))
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.deschedulingIntervalSeconds"))
+			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.mode"))
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.profiles"))
 			Expect(deschedulerItem.ManagedFields).To(ContainElement("spec.profileCustomizations"))
 		})
