@@ -39,6 +39,7 @@ import (
 )
 
 const (
+	// TODO: properly handle it at build time
 	// OperatorVersion is the current version of the operator logic
 	OperatorVersion = "v0.1.31"
 )

@@ -495,6 +495,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 
 	// Set the spec with our desired configuration
 	spec := map[string]interface{}{
+		"managementState":             "Managed",
 		"deschedulingIntervalSeconds": int64(interval),
 		"mode":                        mode,
 		"profiles":                    profiles,
@@ -546,7 +547,7 @@ func (p *LoadAwareRebalancingProfile) generateDeschedulerItem(ctx context.Contex
 	}
 
 	// Determine managed fields based on whether profileCustomizations is set
-	managedFields := []string{"spec.deschedulingIntervalSeconds", "spec.mode", "spec.profiles"}
+	managedFields := []string{"spec.managementState", "spec.deschedulingIntervalSeconds", "spec.mode", "spec.profiles"}
 	if profile == profileKubeVirtRelieveAndMigrate || profile == profileDevKubeVirtRelieveAndMigrate {
 		managedFields = append(managedFields, "spec.profileCustomizations", "spec.evictionLimits")
 	}
